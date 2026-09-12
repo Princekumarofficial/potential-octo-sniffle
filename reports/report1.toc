@@ -1,0 +1,13 @@
+\babel@toc {english}{}\relax 
+\contentsline {section}{Table of Contents}{ii}{Doc-Start}%
+\contentsline {section}{\numberline {1}Introduction}{1}{section.1}%
+\contentsline {section}{\numberline {2}Literature Review}{1}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Observations from the Literature}{7}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Research Gap: Post Hoc Analysis of Forex Reinforcement Learning}{7}{subsection.2.2}%
+\contentsline {section}{\numberline {3}Toy Models and Experimental Setup}{8}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Objective and Target}{8}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Data and Features}{8}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}Baseline Models}{9}{subsection.3.3}%
+\contentsline {subsection}{\numberline {3.4}Neural Network Models}{10}{subsection.3.4}%
+\contentsline {section}{\numberline {4}Evaluation Report}{10}{section.4}%
+\contentsline {section}{\numberline {5}Conclusions and Next Steps}{13}{section.5}%
