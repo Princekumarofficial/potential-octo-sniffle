@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader, TensorDataset
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from sklearn.preprocessing import StandardScaler
 
@@ -735,3 +737,579 @@ def predict_and_store_log_return_model(
         "train_actual_prices": actual_train_prices,
         "test_actual_prices": actual_test_prices,
     }
+
+
+class TimeSeriesWindowDataset(Dataset):
+    """PyTorch Dataset for sliding-window time-series data with configurable window size, offset, stride, and target horizon.
+
+    Parameters
+    ----------
+    features : array-like or torch.Tensor of shape (N, D_in)
+        Input feature time series.
+    targets : array-like or torch.Tensor of shape (N,) or (N, D_out)
+        Target time series (or subset of features).
+    window_size : int, default=30
+        Number of historical time steps in each input window (lookback sequence length L).
+    offset : int, default=0
+        Offset / lead time between the end of the input window and the target.
+        - offset=0: Target begins immediately at index `start_idx + window_size` (1-step ahead / next immediate step).
+        - offset=k (k > 0): Target begins at index `start_idx + window_size + k` (k extra steps ahead).
+        - offset=-1: Target aligns with the last step of the input window (index `start_idx + window_size - 1`).
+    target_size : int, default=1
+        Number of future steps in the target window (for multi-step forecasting).
+    stride : int, default=1
+        Step size between consecutive sliding window sample start positions.
+    valid_indices : list or array of int, optional
+        Explicit sample start indices (useful when creating train/validation/test splits from a single continuous array).
+    dates : array-like or pd.DatetimeIndex, optional
+        Timestamps corresponding to rows in features/targets for metadata retrieval.
+    device : torch.device or str, optional
+        Target device for tensors.
+    dtype : torch.dtype, default=torch.float32
+        Data type for output tensors.
+    """
+
+    def __init__(
+        self,
+        features,
+        targets,
+        window_size=30,
+        offset=0,
+        target_size=1,
+        stride=1,
+        valid_indices=None,
+        dates=None,
+        device=None,
+        dtype=torch.float32,
+    ):
+        super().__init__()
+        self.features = _to_numpy(features)
+        self.targets = _to_numpy(targets)
+        self.window_size = int(window_size)
+        self.offset = int(offset)
+        self.target_size = int(target_size)
+        self.stride = int(stride)
+        self.device = device
+        self.dtype = dtype
+
+        if len(self.features) != len(self.targets):
+            raise ValueError(
+                f"Features length ({len(self.features)}) and targets length ({len(self.targets)}) must match."
+            )
+
+        if self.window_size <= 0:
+            raise ValueError("window_size must be a positive integer.")
+        if self.target_size <= 0:
+            raise ValueError("target_size must be a positive integer.")
+        if self.stride <= 0:
+            raise ValueError("stride must be a positive integer.")
+
+        self.total_len = len(self.features)
+        self.dates = np.asarray(dates) if dates is not None else None
+        if self.dates is not None and len(self.dates) != self.total_len:
+            raise ValueError("Dates array length must match features length.")
+
+        if valid_indices is not None:
+            self.indices = np.asarray(valid_indices, dtype=np.int64)
+        else:
+            indices = []
+            for start_idx in range(0, self.total_len, self.stride):
+                target_start = start_idx + self.window_size + self.offset
+                target_end = target_start + self.target_size
+                if start_idx + self.window_size <= self.total_len and 0 <= target_start and target_end <= self.total_len:
+                    indices.append(start_idx)
+            self.indices = np.asarray(indices, dtype=np.int64)
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, idx):
+        start_idx = self.indices[idx]
+        end_idx = start_idx + self.window_size
+        x_window = self.features[start_idx:end_idx]
+
+        target_start = start_idx + self.window_size + self.offset
+        target_end = target_start + self.target_size
+        y_window = self.targets[target_start:target_end]
+
+        x_tensor = torch.as_tensor(x_window, dtype=self.dtype, device=self.device)
+        y_tensor = torch.as_tensor(y_window, dtype=self.dtype, device=self.device)
+
+        if self.targets.shape[1] == 1:
+            y_tensor = y_tensor.squeeze(-1)
+        if self.target_size == 1 and y_tensor.ndim == 1 and y_tensor.numel() == 1:
+            y_tensor = y_tensor.squeeze(0)
+
+        return x_tensor, y_tensor
+
+    def get_target_indices(self):
+        """Return the target starting indices for all samples in the dataset."""
+        return self.indices + self.window_size + self.offset
+
+    def get_target_dates(self):
+        """Return target dates for all samples in the dataset (if dates were provided)."""
+        if self.dates is None:
+            return None
+        target_indices = self.get_target_indices()
+        return self.dates[target_indices]
+
+    def get_input_window_dates(self, idx):
+        """Return the date range for the input window of sample idx."""
+        if self.dates is None:
+            return None
+        start_idx = self.indices[idx]
+        end_idx = start_idx + self.window_size
+        return self.dates[start_idx:end_idx]
+
+
+def create_time_series_dataloaders(
+    data,
+    target_column="INR",
+    feature_columns=None,
+    window_size=30,
+    offset=0,
+    target_size=1,
+    stride=1,
+    batch_size=64,
+    train_fraction=0.8,
+    validation_fraction=0.1,
+    scale_features=True,
+    scale_targets=True,
+    shuffle_train=True,
+    num_workers=0,
+    pin_memory=False,
+    device=None,
+    dtype=torch.float32,
+):
+    """Create train, validation, and test TimeSeriesWindowDataset and DataLoader objects from tabular time series.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Time series dataframe sorted in chronological order.
+    target_column : str or list of str, default="INR"
+        Column name(s) for the prediction target.
+    feature_columns : list of str, optional
+        Column names to use as input features. Defaults to all columns except target_column if not specified.
+    window_size : int, default=30
+        Lookback sequence length (number of time steps per input sample).
+    offset : int, default=0
+        Offset from the end of the input window to the start of the target.
+        - offset=0: Target is the immediate next time step (index t + window_size).
+        - offset=k: Target is k additional steps ahead (index t + window_size + k).
+    target_size : int, default=1
+        Number of consecutive target steps to predict.
+    stride : int, default=1
+        Stride / step size between consecutive window starts in training set.
+    batch_size : int, default=64
+        Batch size for the DataLoader.
+    train_fraction : float, default=0.8
+        Fraction of data for training.
+    validation_fraction : float, default=0.1
+        Fraction of data for validation. Remaining fraction is used for testing.
+    scale_features : bool, default=True
+        Whether to fit a StandardScaler on train features and scale the full sequence.
+    scale_targets : bool, default=True
+        Whether to fit a StandardScaler on train targets and scale the full sequence.
+    shuffle_train : bool, default=True
+        Whether to shuffle training batches.
+    num_workers : int, default=0
+        Number of subprocesses for data loading.
+    pin_memory : bool, default=False
+        Whether DataLoader should pin memory for faster GPU transfers.
+    device : torch.device or str, optional
+        Target device for dataset tensors.
+    dtype : torch.dtype, default=torch.float32
+        Data type for tensors.
+
+    Returns
+    -------
+    dict
+        Dictionary containing:
+        - "train_loader", "val_loader", "test_loader"
+        - "train_dataset", "val_dataset", "test_dataset"
+        - "feature_scaler", "target_scaler"
+        - "feature_columns", "target_column"
+        - "dates", "window_size", "offset", "target_size"
+    """
+    if isinstance(data, pd.DataFrame):
+        df = data.sort_index().copy()
+        dates = df.index.to_numpy()
+    else:
+        raise TypeError("data must be a pandas DataFrame.")
+
+    target_cols = [target_column] if isinstance(target_column, str) else list(target_column)
+    if feature_columns is None:
+        feature_cols = [col for col in df.columns if col not in target_cols]
+    else:
+        feature_cols = list(feature_columns)
+
+    raw_features = df[feature_cols].to_numpy(dtype=np.float32)
+    raw_targets = df[target_cols].to_numpy(dtype=np.float32)
+    total_len = len(df)
+
+    train_cutoff = int(total_len * train_fraction)
+    val_cutoff = train_cutoff + int(total_len * validation_fraction)
+
+    if train_cutoff <= window_size + offset:
+        raise ValueError(
+            f"Training split ({train_cutoff} rows) is too small for window_size={window_size} and offset={offset}."
+        )
+
+    # Fit scalers strictly on training portion
+    if scale_features:
+        feature_scaler = StandardScaler().fit(raw_features[:train_cutoff])
+        scaled_features = feature_scaler.transform(raw_features).astype(np.float32)
+    else:
+        feature_scaler = None
+        scaled_features = raw_features
+
+    if scale_targets:
+        target_scaler = StandardScaler().fit(raw_targets[:train_cutoff])
+        scaled_targets = target_scaler.transform(raw_targets).astype(np.float32)
+    else:
+        target_scaler = None
+        scaled_targets = raw_targets
+
+    # Determine sample start indices for each split
+    train_indices = []
+    val_indices = []
+    test_indices = []
+
+    for start_idx in range(0, total_len):
+        target_start = start_idx + window_size + offset
+        target_end = target_start + target_size
+
+        if start_idx + window_size <= total_len and 0 <= target_start and target_end <= total_len:
+            if target_end <= train_cutoff:
+                if start_idx % stride == 0:
+                    train_indices.append(start_idx)
+            elif train_cutoff <= target_start < val_cutoff and target_end <= val_cutoff:
+                val_indices.append(start_idx)
+            elif target_start >= val_cutoff:
+                test_indices.append(start_idx)
+
+    train_dataset = TimeSeriesWindowDataset(
+        features=scaled_features,
+        targets=scaled_targets,
+        window_size=window_size,
+        offset=offset,
+        target_size=target_size,
+        stride=stride,
+        valid_indices=train_indices,
+        dates=dates,
+        device=device,
+        dtype=dtype,
+    )
+
+    val_dataset = TimeSeriesWindowDataset(
+        features=scaled_features,
+        targets=scaled_targets,
+        window_size=window_size,
+        offset=offset,
+        target_size=target_size,
+        stride=1,
+        valid_indices=val_indices,
+        dates=dates,
+        device=device,
+        dtype=dtype,
+    )
+
+    test_dataset = TimeSeriesWindowDataset(
+        features=scaled_features,
+        targets=scaled_targets,
+        window_size=window_size,
+        offset=offset,
+        target_size=target_size,
+        stride=1,
+        valid_indices=test_indices,
+        dates=dates,
+        device=device,
+        dtype=dtype,
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=shuffle_train,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    ) if len(train_dataset) > 0 else None
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    ) if len(val_dataset) > 0 else None
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    ) if len(test_dataset) > 0 else None
+
+    return {
+        "train_loader": train_loader,
+        "val_loader": val_loader,
+        "test_loader": test_loader,
+        "train_dataset": train_dataset,
+        "val_dataset": val_dataset,
+        "test_dataset": test_dataset,
+        "feature_scaler": feature_scaler,
+        "target_scaler": target_scaler,
+        "feature_columns": feature_cols,
+        "target_column": target_cols[0] if len(target_cols) == 1 else target_cols,
+        "raw_features": raw_features,
+        "raw_targets": raw_targets,
+        "scaled_features": scaled_features,
+        "scaled_targets": scaled_targets,
+        "dates": dates,
+        "window_size": window_size,
+        "offset": offset,
+        "target_size": target_size,
+        "stride": stride,
+    }
+
+
+def train_torch_model_dataloader(
+    model,
+    optimizer,
+    loss_function,
+    train_loader,
+    val_loader=None,
+    epochs=100,
+    device=None,
+    log_every=10,
+    scheduler=None,
+    early_stopping_patience=None,
+):
+    """Train a PyTorch model using DataLoaders with validation and optional early stopping."""
+    target_device = device or (next(model.parameters()).device if list(model.parameters()) else torch.device("cpu"))
+    model.to(target_device)
+
+    train_losses = []
+    val_losses = []
+    best_val_loss = float("inf")
+    best_state = None
+    patience_counter = 0
+
+    for epoch in range(epochs):
+        model.train()
+        running_train_loss = 0.0
+        num_train_batches = 0
+
+        for batch_x, batch_y in train_loader:
+            batch_x = batch_x.to(target_device)
+            batch_y = batch_y.to(target_device)
+
+            optimizer.zero_grad()
+            predictions = model(batch_x)
+            if predictions.shape != batch_y.shape:
+                if predictions.ndim == 2 and predictions.shape[1] == 1 and batch_y.ndim == 1:
+                    predictions = predictions.squeeze(1)
+                elif batch_y.ndim == 2 and batch_y.shape[1] == 1 and predictions.ndim == 1:
+                    predictions = predictions.unsqueeze(1)
+
+            loss = loss_function(predictions, batch_y)
+            loss.backward()
+            optimizer.step()
+
+            running_train_loss += loss.item()
+            num_train_batches += 1
+
+        epoch_train_loss = running_train_loss / max(num_train_batches, 1)
+        train_losses.append(epoch_train_loss)
+
+        epoch_val_loss = None
+        if val_loader is not None and len(val_loader) > 0:
+            model.eval()
+            running_val_loss = 0.0
+            num_val_batches = 0
+            with torch.no_grad():
+                for val_x, val_y in val_loader:
+                    val_x = val_x.to(target_device)
+                    val_y = val_y.to(target_device)
+                    val_preds = model(val_x)
+                    if val_preds.shape != val_y.shape:
+                        if val_preds.ndim == 2 and val_preds.shape[1] == 1 and val_y.ndim == 1:
+                            val_preds = val_preds.squeeze(1)
+                        elif val_y.ndim == 2 and val_y.shape[1] == 1 and val_preds.ndim == 1:
+                            val_preds = val_preds.unsqueeze(1)
+                    v_loss = loss_function(val_preds, val_y)
+                    running_val_loss += v_loss.item()
+                    num_val_batches += 1
+
+            epoch_val_loss = running_val_loss / max(num_val_batches, 1)
+            val_losses.append(epoch_val_loss)
+
+            if scheduler is not None:
+                if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                    scheduler.step(epoch_val_loss)
+                else:
+                    scheduler.step()
+
+            if early_stopping_patience is not None:
+                if epoch_val_loss < best_val_loss:
+                    best_val_loss = epoch_val_loss
+                    best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    if patience_counter >= early_stopping_patience:
+                        if log_every:
+                            print(f"Early stopping triggered at epoch {epoch + 1}. Restoring best weights (Val Loss: {best_val_loss:.4f}).")
+                        if best_state is not None:
+                            model.load_state_dict(best_state)
+                        break
+        elif scheduler is not None:
+            scheduler.step()
+
+        if log_every and (epoch + 1) % log_every == 0:
+            val_str = f", Val Loss: {epoch_val_loss:.4f}" if epoch_val_loss is not None else ""
+            print(f"Epoch {epoch + 1}/{epochs} - Train Loss: {epoch_train_loss:.4f}{val_str}")
+
+    return {
+        "train_losses": train_losses,
+        "val_losses": val_losses,
+        "best_val_loss": best_val_loss if val_loader is not None else None,
+    }
+
+
+def evaluate_torch_model_dataloader(
+    model,
+    dataloader,
+    device=None,
+    target_scaler=None,
+    previous_values=None,
+    dates=None,
+    title="Model Predictions vs Targets",
+    plot=False,
+):
+    """Evaluate a PyTorch model on a DataLoader, returning predictions, actual targets, and metrics."""
+    target_device = device or (next(model.parameters()).device if list(model.parameters()) else torch.device("cpu"))
+    model.to(target_device)
+    model.eval()
+
+    all_preds = []
+    all_targets = []
+
+    with torch.no_grad():
+        for batch_x, batch_y in dataloader:
+            batch_x = batch_x.to(target_device)
+            preds = model(batch_x)
+            all_preds.append(preds.detach().cpu().numpy())
+            all_targets.append(batch_y.detach().cpu().numpy())
+
+    preds_arr = np.concatenate(all_preds, axis=0)
+    targets_arr = np.concatenate(all_targets, axis=0)
+
+    if target_scaler is not None:
+        orig_shape = preds_arr.shape
+        preds_2d = preds_arr.reshape(-1, 1) if preds_arr.ndim == 1 else preds_arr
+        targets_2d = targets_arr.reshape(-1, 1) if targets_arr.ndim == 1 else targets_arr
+
+        preds_arr = target_scaler.inverse_transform(preds_2d)
+        targets_arr = target_scaler.inverse_transform(targets_2d)
+
+        if len(orig_shape) == 1 or (len(orig_shape) == 2 and orig_shape[1] == 1):
+            preds_arr = preds_arr.flatten()
+            targets_arr = targets_arr.flatten()
+
+    target_dates = dates
+    if target_dates is None and hasattr(dataloader.dataset, "get_target_dates"):
+        target_dates = dataloader.dataset.get_target_dates()
+
+    metrics = calculate_directional_metrics(preds_arr, targets_arr, previous_values)
+
+    if plot:
+        plot_predictions_vs_targets(
+            preds_arr,
+            targets_arr,
+            x_values=target_dates,
+            title=title,
+        )
+
+    return {
+        "predictions": preds_arr,
+        "targets": targets_arr,
+        "metrics": metrics,
+        "dates": target_dates,
+    }
+
+
+def predict_and_store_window_model(
+    model,
+    model_name,
+    loaders_dict,
+    model_results,
+    device=None,
+    output_path="model_results.json",
+    metadata=None,
+):
+    """Evaluate train, validation, and test dataloaders for a windowed model, storing predictions and metrics."""
+    target_scaler = loaders_dict.get("target_scaler")
+    train_loader = loaders_dict.get("train_loader")
+    val_loader = loaders_dict.get("val_loader")
+    test_loader = loaders_dict.get("test_loader")
+
+    train_eval = None
+    if train_loader is not None:
+        train_eval = evaluate_torch_model_dataloader(
+            model,
+            train_loader,
+            device=device,
+            target_scaler=target_scaler,
+        )
+        store_model_prediction(
+            model_results,
+            model_name,
+            train_eval["predictions"],
+            train_eval["metrics"],
+            "train",
+            output_path=output_path,
+            metadata=metadata,
+        )
+
+    val_eval = None
+    if val_loader is not None:
+        val_eval = evaluate_torch_model_dataloader(
+            model,
+            val_loader,
+            device=device,
+            target_scaler=target_scaler,
+        )
+        store_model_prediction(
+            model_results,
+            model_name,
+            val_eval["predictions"],
+            val_eval["metrics"],
+            "validation",
+            output_path=output_path,
+        )
+
+    test_eval = None
+    if test_loader is not None:
+        test_eval = evaluate_torch_model_dataloader(
+            model,
+            test_loader,
+            device=device,
+            target_scaler=target_scaler,
+        )
+        store_model_prediction(
+            model_results,
+            model_name,
+            test_eval["predictions"],
+            test_eval["metrics"],
+            "test",
+            output_path=output_path,
+        )
+
+    return {
+        "train": train_eval,
+        "validation": val_eval,
+        "test": test_eval,
+    }
