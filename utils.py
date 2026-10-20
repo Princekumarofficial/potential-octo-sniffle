@@ -1179,6 +1179,238 @@ def train_torch_model_dataloader(
     }
 
 
+def train_on_val_data(
+    model,
+    val_loader,
+    loss_function,
+    optimizer=None,
+    epochs=15,
+    lr=1e-4,
+    device=None,
+    log_every=5,
+    scheduler=None,
+    clip_grad_norm=None,
+    shuffle=True,
+):
+    """
+    Train / fine-tune a model on the validation data.
+
+    In quantitative time-series forecasting, models are initially trained on the training
+    split and evaluated/tuned on the validation split. Before predicting on the test set,
+    continuing training on the validation set adapts the model's parameters and internal
+    states to the market regime immediately preceding the test period.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The PyTorch model to train (e.g. LSTMForecaster).
+    val_loader : torch.utils.data.DataLoader or dict
+        DataLoader containing validation batches, or a dict containing a 'val_loader' key.
+    loss_function : callable
+        Loss function (e.g., BigMoveAwareLoss or nn.MSELoss).
+    optimizer : torch.optim.Optimizer, optional
+        Optimizer for training. If None, an Adam optimizer with weight_decay=1e-5
+        and learning rate `lr` is automatically instantiated.
+    epochs : int, default=15
+        Number of epochs to train on the validation data.
+    lr : float, default=1e-4
+        Learning rate if optimizer is not provided. Defaults to 1e-4 (fine-tuning rate).
+    device : torch.device or str, optional
+        Target device (CPU or CUDA). Defaults to model device or CUDA if available.
+    log_every : int, default=5
+        Frequency (in epochs) to print the average epoch loss. Set to 0 to disable.
+    scheduler : torch.optim.lr_scheduler, optional
+        Optional learning rate scheduler stepped after each epoch.
+    clip_grad_norm : float, optional
+        If specified, gradients are clipped to this maximum norm.
+    shuffle : bool, default=True
+        Whether to shuffle validation batches during training for improved gradient variance.
+
+    Returns
+    -------
+    dict
+        Dictionary containing:
+        - "val_train_losses": list of average training losses per epoch on the validation data.
+    """
+    if isinstance(val_loader, dict):
+        if "val_loader" in val_loader:
+            val_loader = val_loader["val_loader"]
+        elif "validation" in val_loader:
+            val_loader = val_loader["validation"]
+        else:
+            raise KeyError("val_loader dict must contain 'val_loader' or 'validation' key.")
+
+    if val_loader is None or len(val_loader) == 0:
+        raise ValueError("val_loader is empty or None.")
+
+    target_device = device or (
+        next(model.parameters()).device
+        if list(model.parameters())
+        else (torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    )
+    model.to(target_device)
+
+    if optimizer is None:
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+
+    loader_to_use = val_loader
+    if shuffle and hasattr(val_loader, "dataset") and val_loader.dataset is not None:
+        batch_size = getattr(val_loader, "batch_size", 32)
+        loader_to_use = DataLoader(
+            val_loader.dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=getattr(val_loader, "num_workers", 0),
+            pin_memory=getattr(val_loader, "pin_memory", False),
+        )
+
+    val_train_losses = []
+
+    for epoch in range(epochs):
+        model.train()
+        running_loss = 0.0
+        num_batches = 0
+
+        for batch_x, batch_y in loader_to_use:
+            batch_x = batch_x.to(target_device)
+            batch_y = batch_y.to(target_device)
+
+            optimizer.zero_grad()
+            predictions = model(batch_x)
+            if predictions.shape != batch_y.shape:
+                if predictions.ndim == 2 and predictions.shape[1] == 1 and batch_y.ndim == 1:
+                    predictions = predictions.squeeze(1)
+                elif batch_y.ndim == 2 and batch_y.shape[1] == 1 and predictions.ndim == 1:
+                    predictions = predictions.unsqueeze(1)
+
+            loss = loss_function(predictions, batch_y)
+            loss.backward()
+
+            if clip_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
+
+            optimizer.step()
+
+            running_loss += loss.item()
+            num_batches += 1
+
+        epoch_loss = running_loss / max(num_batches, 1)
+        val_train_losses.append(epoch_loss)
+
+        if scheduler is not None:
+            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(epoch_loss)
+            else:
+                scheduler.step()
+
+        if log_every and (epoch + 1) % log_every == 0:
+            print(f"Val Training Epoch {epoch + 1}/{epochs} - Loss: {epoch_loss:.5f}")
+
+    return {
+        "val_train_losses": val_train_losses,
+    }
+
+
+def train_torch_model_with_val_data(
+    model,
+    optimizer,
+    loss_function,
+    train_loader,
+    val_loader,
+    epochs=80,
+    val_epochs=15,
+    val_lr=1e-4,
+    device=None,
+    log_every=10,
+    scheduler=None,
+    early_stopping_patience=None,
+    clip_grad_norm=None,
+):
+    """
+    Two-stage training pipeline that trains on training data, validates/restores best weights,
+    and then trains on the validation data too.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        PyTorch model to train.
+    optimizer : torch.optim.Optimizer
+        Optimizer for stage 1 (training split).
+    loss_function : callable
+        Loss function.
+    train_loader : DataLoader or dict
+        DataLoader for training set (or loaders_dict).
+    val_loader : DataLoader, optional
+        DataLoader for validation set (extracted automatically if loaders_dict passed).
+    epochs : int, default=80
+        Epochs for stage 1 training.
+    val_epochs : int, default=15
+        Epochs for stage 2 training on validation data.
+    val_lr : float, default=1e-4
+        Learning rate for stage 2 validation training.
+    device : torch.device or str, optional
+        Target device.
+    log_every : int, default=10
+        Logging frequency.
+    scheduler : torch.optim.lr_scheduler, optional
+        Learning rate scheduler for stage 1.
+    early_stopping_patience : int, optional
+        Patience for early stopping during stage 1.
+    clip_grad_norm : float, optional
+        Maximum gradient norm.
+
+    Returns
+    -------
+    dict
+        Combined training history with 'train_losses', 'val_losses', 'best_val_loss',
+        and 'val_train_losses'.
+    """
+    if isinstance(train_loader, dict):
+        if val_loader is None or isinstance(val_loader, dict):
+            val_loader = train_loader.get("val_loader")
+        train_loader = train_loader.get("train_loader")
+
+    # Stage 1: Train on train_loader with val_loader monitoring
+    stage1_history = train_torch_model_dataloader(
+        model=model,
+        optimizer=optimizer,
+        loss_function=loss_function,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        epochs=epochs,
+        device=device,
+        log_every=log_every,
+        scheduler=scheduler,
+        early_stopping_patience=early_stopping_patience,
+    )
+
+    # Stage 2: Train on val_loader
+    val_train_history = {}
+    if val_loader is not None and val_epochs > 0:
+        if log_every:
+            print(f"\n--- Starting Stage 2: Training on Validation Data ({val_epochs} epochs, lr={val_lr}) ---")
+        val_optimizer = torch.optim.Adam(model.parameters(), lr=val_lr, weight_decay=1e-5)
+        val_train_history = train_on_val_data(
+            model=model,
+            val_loader=val_loader,
+            loss_function=loss_function,
+            optimizer=val_optimizer,
+            epochs=val_epochs,
+            lr=val_lr,
+            device=device,
+            log_every=max(1, val_epochs // 3) if log_every else 0,
+            clip_grad_norm=clip_grad_norm,
+            shuffle=True,
+        )
+
+    return {
+        "train_losses": stage1_history.get("train_losses", []),
+        "val_losses": stage1_history.get("val_losses", []),
+        "best_val_loss": stage1_history.get("best_val_loss"),
+        "val_train_losses": val_train_history.get("val_train_losses", []),
+    }
+
+
 def evaluate_torch_model_dataloader(
     model,
     dataloader,
@@ -1249,67 +1481,784 @@ def predict_and_store_window_model(
     device=None,
     output_path="model_results.json",
     metadata=None,
+    price_data=None,
+    price_column=None,
 ):
-    """Evaluate train, validation, and test dataloaders for a windowed model, storing predictions and metrics."""
-    target_scaler = loaders_dict.get("target_scaler")
-    train_loader = loaders_dict.get("train_loader")
-    val_loader = loaders_dict.get("val_loader")
-    test_loader = loaders_dict.get("test_loader")
+    """Evaluate windowed log-return models and store reconstructed prices."""
+    if price_data is None or price_column is None:
+        raise ValueError("price_data and price_column are required to reconstruct prices.")
 
-    train_eval = None
-    if train_loader is not None:
-        train_eval = evaluate_torch_model_dataloader(
+    target_scaler = loaders_dict.get("target_scaler")
+    split_loaders = {
+        "train": loaders_dict.get("train_loader"),
+        "validation": loaders_dict.get("val_loader"),
+        "test": loaders_dict.get("test_loader"),
+    }
+    results = {}
+
+    for split, loader in split_loaders.items():
+        if loader is None:
+            results[split] = None
+            continue
+
+        evaluation = evaluate_torch_model_dataloader(
             model,
-            train_loader,
+            loader,
             device=device,
             target_scaler=target_scaler,
+            plot=False,
+        )
+
+        # Dates identify the source row whose price is the base for the next return.
+        dates = evaluation["dates"]
+        current_prices = price_data.loc[dates, price_column].to_numpy().reshape(-1)
+        predicted_returns = np.asarray(evaluation["predictions"]).reshape(-1)
+        actual_returns = np.asarray(evaluation["targets"]).reshape(-1)
+
+        predicted_prices = current_prices * np.exp(predicted_returns)
+        actual_prices = current_prices * np.exp(actual_returns)
+
+        price_metrics = evaluate_predictions(
+            predicted_prices,
+            actual_prices,
+            previous_values=current_prices,
         )
         store_model_prediction(
             model_results,
             model_name,
-            train_eval["predictions"],
-            train_eval["metrics"],
-            "train",
+            predicted_prices,
+            price_metrics,
+            split,
             output_path=output_path,
             metadata=metadata,
         )
 
-    val_eval = None
-    if val_loader is not None:
-        val_eval = evaluate_torch_model_dataloader(
-            model,
-            val_loader,
-            device=device,
-            target_scaler=target_scaler,
-        )
-        store_model_prediction(
-            model_results,
-            model_name,
-            val_eval["predictions"],
-            val_eval["metrics"],
-            "validation",
-            output_path=output_path,
+        # Preserve log-return values for the notebook's LSTM plots and reporting.
+        results[split] = evaluation
+
+    return results
+
+class ProfitCalculator:
+    def __init__(self, predictions, actual_returns, initial_capital=10000):
+        """
+        predictions: array of trade signals (-1=Sell, 0=Hold, 1=Buy) or predicted returns
+        actual_returns: array of actual numerical returns for the next day
+        """
+        preds = np.asarray(predictions, dtype=np.float64).reshape(-1)
+        # If continuous predictions (log returns) were provided instead of discrete trade signals,
+        # automatically convert them to directional trade signals {-1, 1} to prevent return squaring.
+        if not np.all(np.isin(preds, [-1, 0, 1])):
+            preds = np.sign(preds)
+            preds[preds == 0] = 1
+
+        self.predictions = preds
+        self.actual_returns = np.asarray(actual_returns, dtype=np.float64).reshape(-1)
+        self.initial_capital = initial_capital
+
+        min_len = min(len(self.predictions), len(self.actual_returns))
+        self.predictions = self.predictions[:min_len]
+        self.actual_returns = self.actual_returns[:min_len]
+
+        # Compute period returns: Signal * Actual Return
+        self.strategy_returns = self.predictions * self.actual_returns
+
+        self.cumulative_returns = np.cumprod(1 + self.strategy_returns)
+        self.cumulative_profits = self.initial_capital * self.cumulative_returns
+
+        # Benchmark (Buy and Hold)
+        self.benchmark_returns = self.actual_returns
+        self.benchmark_cumulative = np.cumprod(1 + self.benchmark_returns)
+        self.benchmark_profits = self.initial_capital * self.benchmark_cumulative
+
+    def summary(self):
+        total_strategy_return = (self.cumulative_returns[-1] - 1) * 100
+        total_benchmark_return = (self.benchmark_cumulative[-1] - 1) * 100
+
+        print("=== Profit Summary ===")
+        print(f"Initial Capital: ${self.initial_capital:,.2f}")
+        print(f"Final Strategy Value: ${self.cumulative_profits[-1]:,.2f} ({total_strategy_return:.2f}%)")
+        print(f"Final Buy & Hold Value: ${self.benchmark_profits[-1]:,.2f} ({total_benchmark_return:.2f}%)")
+
+        # Calculate max drawdown
+        roll_max = np.maximum.accumulate(self.cumulative_profits)
+        drawdown = (self.cumulative_profits - roll_max) / roll_max
+        max_drawdown = np.min(drawdown) * 100
+        print(f"Strategy Max Drawdown: {max_drawdown:.2f}%")
+
+    def plot(self):
+        plt.figure(figsize=(12, 6))
+        plt.plot(self.cumulative_profits, label="Strategy Profits", linewidth=2)
+        plt.plot(self.benchmark_profits, label="Buy & Hold Profits", linestyle="--", alpha=0.7)
+        plt.title("Cumulative Profits: Strategy vs Buy & Hold")
+        plt.xlabel("Trade Steps (Days)")
+        plt.ylabel("Portfolio Value ($)")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.show()
+
+
+class AdvancedProfitCalculator:
+    """
+    Professional Quantitative Trading Backtester for Forex and Time-Series Return Predictions.
+
+    Features:
+    - Supports continuous predicted log returns or discrete trade signals {-1, 0, 1}.
+    - Confidence / Edge Deadzone Threshold: avoids trading on tiny low-conviction noise.
+    - Risk Boundaries: Take-Profit (TP) and Stop-Loss (SL) with customizable Risk-Reward Ratio (RRR).
+    - Supports dynamic ATR-based TP/SL or static percentage TP/SL.
+    - Position Sizing & Capital Allocation: Professional Fixed Fractional Risk model (% risk per trade)
+      or 100% unleveraged allocation.
+    - Realistic Friction: Deducts bid-ask spread and broker commissions per trade.
+    - Quantitative Trader Dashboard: Win Rate, Profit Factor, Expectancy, Realized RRR,
+      Max Drawdown, Sharpe Ratio, Sortino Ratio, Calmar Ratio.
+    - 3-Panel Visual Analytics: Equity Curve vs Benchmark, Underwater Drawdown, PnL Distribution.
+    """
+    def __init__(
+        self,
+        predictions,
+        actual_returns,
+        initial_capital=10000.0,
+        stop_loss=0.005,             # 0.5% Stop Loss (baseline)
+        take_profit=None,            # If None, automatically set to stop_loss * risk_reward_ratio
+        risk_reward_ratio=2.0,       # 1:2 Risk-Reward Ratio
+        threshold=0.0001,            # Minimum predicted return to open a trade (confidence filter)
+        risk_per_trade=0.02,         # Risk 2% of portfolio equity per trade (fixed fractional sizing)
+        fee_per_trade=0.0001,        # 1 pip spread + commission round-trip
+        max_leverage=3.0,            # Cap on maximum leverage for position sizing
+        use_fixed_fraction=True,     # True: size based on risk/SL; False: 100% unleveraged allocation
+        atr=None,                    # Optional 1D array of ATR or rolling volatility for dynamic TP/SL
+        dates=None,                  # Optional datetime index for plotting
+    ):
+        self.predictions = np.asarray(predictions, dtype=np.float64).reshape(-1)
+        self.actual_returns = np.asarray(actual_returns, dtype=np.float64).reshape(-1)
+        self.initial_capital = float(initial_capital)
+        self.stop_loss = float(stop_loss)
+        self.risk_reward_ratio = float(risk_reward_ratio)
+        self.take_profit = float(take_profit) if take_profit is not None else (self.stop_loss * self.risk_reward_ratio)
+        self.threshold = float(threshold)
+        self.risk_per_trade = float(risk_per_trade)
+        self.fee_per_trade = float(fee_per_trade)
+        self.max_leverage = float(max_leverage)
+        self.use_fixed_fraction = bool(use_fixed_fraction)
+        self.atr = np.asarray(atr, dtype=np.float64).reshape(-1) if atr is not None else None
+        self.dates = np.asarray(dates) if dates is not None else None
+
+        min_len = min(len(self.predictions), len(self.actual_returns))
+        self.predictions = self.predictions[:min_len]
+        self.actual_returns = self.actual_returns[:min_len]
+        if self.atr is not None:
+            self.atr = self.atr[:min_len]
+        if self.dates is not None:
+            self.dates = self.dates[:min_len]
+
+        self._run_backtest()
+
+    def _run_backtest(self):
+        equity = [self.initial_capital]
+        trades = []
+        is_discrete = np.all(np.isin(self.predictions, [-1, 0, 1]))
+
+        for i in range(len(self.predictions)):
+            curr_equity = equity[-1]
+            pred = self.predictions[i]
+            actual = self.actual_returns[i]
+
+            # Signal derivation
+            if is_discrete:
+                signal = int(pred)
+            else:
+                if pred > self.threshold:
+                    signal = 1
+                elif pred < -self.threshold:
+                    signal = -1
+                else:
+                    signal = 0
+
+            # Neutral / Cash day
+            if signal == 0:
+                equity.append(curr_equity)
+                trades.append({
+                    'index': i,
+                    'signal': 0,
+                    'actual': actual,
+                    'trade_ret': 0.0,
+                    'exit': 'NO_TRADE',
+                    'position_size': 0.0,
+                    'pnl': 0.0,
+                    'equity': curr_equity
+                })
+                continue
+
+            # Dynamic vs Static TP/SL
+            if self.atr is not None and not np.isnan(self.atr[i]) and self.atr[i] > 0:
+                cur_sl = self.atr[i] * (self.stop_loss / 0.005)
+                cur_tp = cur_sl * self.risk_reward_ratio
+            else:
+                cur_sl = self.stop_loss
+                cur_tp = self.take_profit
+
+            # Directional movement
+            raw_move = signal * actual
+
+            # Barrier evaluation
+            if raw_move >= cur_tp:
+                trade_ret = cur_tp
+                exit_reason = 'TP'
+            elif raw_move <= -cur_sl:
+                trade_ret = -cur_sl
+                exit_reason = 'SL'
+            else:
+                trade_ret = raw_move
+                exit_reason = 'CLOSE'
+
+            net_ret = trade_ret - self.fee_per_trade
+
+            # Position Sizing
+            if self.use_fixed_fraction:
+                pos_size = (curr_equity * self.risk_per_trade) / max(cur_sl, 1e-5)
+                pos_size = min(pos_size, curr_equity * self.max_leverage)
+            else:
+                pos_size = curr_equity
+
+            dollar_pnl = pos_size * net_ret
+            new_equity = max(curr_equity + dollar_pnl, 0.0)
+            equity.append(new_equity)
+
+            trades.append({
+                'index': i,
+                'signal': signal,
+                'actual': actual,
+                'trade_ret': net_ret,
+                'exit': exit_reason,
+                'position_size': pos_size,
+                'pnl': dollar_pnl,
+                'equity': new_equity
+            })
+
+        self.equity_curve = np.array(equity)
+        self.trades = trades
+
+        # Benchmark (Buy and Hold)
+        bench_ret = np.cumprod(1 + self.actual_returns)
+        self.benchmark_curve = np.insert(self.initial_capital * bench_ret, 0, self.initial_capital)
+
+        self._calculate_metrics()
+
+    def _calculate_metrics(self):
+        active_trades = [t for t in self.trades if t['signal'] != 0]
+        long_trades = [t for t in active_trades if t['signal'] == 1]
+        short_trades = [t for t in active_trades if t['signal'] == -1]
+        neutral_days = len(self.trades) - len(active_trades)
+
+        wins = [t for t in active_trades if t['pnl'] > 0]
+        losses = [t for t in active_trades if t['pnl'] < 0]
+
+        total_trades = len(active_trades)
+        win_count = len(wins)
+        loss_count = len(losses)
+
+        win_rate = (win_count / total_trades * 100.0) if total_trades > 0 else 0.0
+        loss_rate = (loss_count / total_trades * 100.0) if total_trades > 0 else 0.0
+
+        gross_profit = sum(t['pnl'] for t in wins)
+        gross_loss = abs(sum(t['pnl'] for t in losses))
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (float('inf') if gross_profit > 0 else 0.0)
+
+        avg_win = (gross_profit / win_count) if win_count > 0 else 0.0
+        avg_loss = (gross_loss / loss_count) if loss_count > 0 else 0.0
+        realized_rrr = (avg_win / avg_loss) if avg_loss > 0 else 0.0
+
+        p_win = win_count / total_trades if total_trades > 0 else 0.0
+        p_loss = loss_count / total_trades if total_trades > 0 else 0.0
+        expectancy = (p_win * avg_win) - (p_loss * avg_loss)
+
+        final_strat_val = self.equity_curve[-1]
+        strat_return = ((final_strat_val - self.initial_capital) / self.initial_capital) * 100.0
+        bench_return = ((self.benchmark_curve[-1] - self.initial_capital) / self.initial_capital) * 100.0
+
+        roll_max = np.maximum.accumulate(self.equity_curve)
+        drawdowns = (self.equity_curve - roll_max) / (roll_max + 1e-9)
+        max_drawdown = float(np.min(drawdowns) * 100.0)
+
+        pct_returns = np.diff(self.equity_curve) / (self.equity_curve[:-1] + 1e-9)
+        mean_ret = np.mean(pct_returns) if len(pct_returns) > 0 else 0.0
+        std_ret = np.std(pct_returns) if len(pct_returns) > 0 else 1.0
+        sharpe = (mean_ret / (std_ret + 1e-9)) * np.sqrt(252)
+
+        downside_returns = pct_returns[pct_returns < 0]
+        downside_std = np.std(downside_returns) if len(downside_returns) > 0 else 1e-9
+        sortino = (mean_ret / (downside_std + 1e-9)) * np.sqrt(252)
+
+        cagr = ((final_strat_val / self.initial_capital) ** (252 / max(len(self.actual_returns), 1)) - 1) * 100.0
+        calmar = abs(cagr / max_drawdown) if max_drawdown < 0 else 0.0
+
+        self.metrics = {
+            'total_steps': len(self.actual_returns),
+            'total_trades': total_trades,
+            'long_trades': len(long_trades),
+            'short_trades': len(short_trades),
+            'neutral_days': neutral_days,
+            'win_count': win_count,
+            'loss_count': loss_count,
+            'win_rate': win_rate,
+            'loss_rate': loss_rate,
+            'gross_profit': gross_profit,
+            'gross_loss': gross_loss,
+            'profit_factor': profit_factor,
+            'avg_win': avg_win,
+            'avg_loss': avg_loss,
+            'realized_rrr': realized_rrr,
+            'expectancy': expectancy,
+            'initial_capital': self.initial_capital,
+            'final_equity': final_strat_val,
+            'strategy_return_pct': strat_return,
+            'benchmark_return_pct': bench_return,
+            'alpha_pct': strat_return - bench_return,
+            'max_drawdown_pct': max_drawdown,
+            'cagr_pct': cagr,
+            'sharpe_ratio': sharpe,
+            'sortino_ratio': sortino,
+            'calmar_ratio': calmar,
+            'tp_hits': sum(1 for t in active_trades if t['exit'] == 'TP'),
+            'sl_hits': sum(1 for t in active_trades if t['exit'] == 'SL'),
+            'close_hits': sum(1 for t in active_trades if t['exit'] == 'CLOSE'),
+            'drawdowns': drawdowns,
+        }
+
+    def summary(self):
+        m = self.metrics
+        print("=" * 80)
+        print("           INSTITUTIONAL QUANT TRADING PERFORMANCE REPORT")
+        print("=" * 80)
+        print(f"CAPITAL & RETURNS:")
+        print(f"  Initial Capital        : ${m['initial_capital']:,.2f}")
+        print(f"  Final Portfolio Value  : ${m['final_equity']:,.2f}")
+        print(f"  Strategy Net Return    : {m['strategy_return_pct']:+.2f}%")
+        print(f"  Benchmark (Buy & Hold) : {m['benchmark_return_pct']:+.2f}%")
+        print(f"  Strategy Alpha         : {m['alpha_pct']:+.2f}%")
+        print(f"  Annualized CAGR        : {m['cagr_pct']:+.2f}%")
+        print("-" * 80)
+        print(f"TRADE EXECUTION & WIN/LOSS METRICS:")
+        print(f"  Total Trades Executed  : {m['total_trades']} (Long: {m['long_trades']}, Short: {m['short_trades']}, Neutral: {m['neutral_days']})")
+        print(f"  Winning Trades         : {m['win_count']} ({m['win_rate']:.2f}%)")
+        print(f"  Losing Trades          : {m['loss_count']} ({m['loss_rate']:.2f}%)")
+        print(f"  Average Win ($)        : ${m['avg_win']:,.2f}")
+        print(f"  Average Loss ($)       : ${m['avg_loss']:,.2f}")
+        print(f"  Realized Risk/Reward   : {m['realized_rrr']:.2f}")
+        print(f"  Gross Profit           : ${m['gross_profit']:,.2f}")
+        print(f"  Gross Loss             : ${m['gross_loss']:,.2f}")
+        print(f"  Profit Factor          : {m['profit_factor']:.2f}")
+        print(f"  Trade Expectancy       : ${m['expectancy']:,.2f} per trade")
+        print("-" * 80)
+        print(f"RISK-ADJUSTED METRICS:")
+        print(f"  Max Drawdown           : {m['max_drawdown_pct']:.2f}%")
+        print(f"  Annualized Sharpe      : {m['sharpe_ratio']:.2f}")
+        print(f"  Annualized Sortino     : {m['sortino_ratio']:.2f}")
+        print(f"  Calmar Ratio           : {m['calmar_ratio']:.2f}")
+        print("-" * 80)
+        print(f"EXIT REASONS BREAKDOWN:")
+        print(f"  Take-Profit (TP) Hits  : {m['tp_hits']}")
+        print(f"  Stop-Loss (SL) Hits    : {m['sl_hits']}")
+        print(f"  End-of-Day Close Hits  : {m['close_hits']}")
+        print("=" * 80)
+
+    def plot(self, figsize=(14, 11)):
+        m = self.metrics
+        fig, axes = plt.subplots(3, 1, figsize=figsize, gridspec_kw={'height_ratios': [2.2, 1.2, 1.4]})
+
+        if self.dates is not None:
+            x_axis = self.dates
+            equity_curve = self.equity_curve[1:]
+            benchmark_curve = self.benchmark_curve[1:]
+            drawdowns = m['drawdowns'][1:]
+        else:
+            x_axis = np.arange(len(self.equity_curve))
+            equity_curve = self.equity_curve
+            benchmark_curve = self.benchmark_curve
+            drawdowns = m['drawdowns']
+
+        # Panel 1: Equity Curve vs Benchmark
+        axes[0].plot(x_axis, equity_curve, label=f"Strategy Equity (${m['final_equity']:,.0f} / {m['strategy_return_pct']:+.1f}%)", color="#1E88E5", linewidth=2.2)
+        axes[0].plot(x_axis, benchmark_curve, label=f"Buy & Hold (${self.benchmark_curve[-1]:,.0f} / {m['benchmark_return_pct']:+.1f}%)", color="#78909C", linestyle="--", linewidth=1.5)
+        axes[0].axhline(y=self.initial_capital, color="#B0BEC5", linestyle=":", linewidth=1.2, label=f"Initial Capital (${self.initial_capital:,.0f})")
+        axes[0].set_title(f"Cumulative Portfolio Value (Alpha: {m['alpha_pct']:+.1f}% | Profit Factor: {m['profit_factor']:.2f} | Sharpe: {m['sharpe_ratio']:.2f})", fontsize=12, fontweight="bold")
+        axes[0].set_ylabel("Portfolio Value ($)", fontsize=11)
+        axes[0].legend(loc="upper left", framealpha=0.9)
+        axes[0].grid(True, linestyle=":", alpha=0.6)
+
+        # Panel 2: Underwater Drawdown
+        axes[1].fill_between(x_axis, drawdowns * 100, 0, color="#E53935", alpha=0.35)
+        axes[1].plot(x_axis, drawdowns * 100, color="#C62828", linewidth=1.2)
+        axes[1].axhline(y=m['max_drawdown_pct'], color="#B71C1C", linestyle="--", linewidth=1.0, label=f"Max Drawdown ({m['max_drawdown_pct']:.2f}%)")
+        axes[1].set_title("Underwater Portfolio Drawdown (%)", fontsize=11, fontweight="bold")
+        axes[1].set_ylabel("Drawdown (%)", fontsize=10)
+        axes[1].legend(loc="lower left", framealpha=0.9)
+        axes[1].grid(True, linestyle=":", alpha=0.6)
+
+        # Panel 3: Trade PnL Distribution
+        active_pnls = [t['pnl'] for t in self.trades if t['signal'] != 0]
+        if active_pnls:
+            bins = np.linspace(np.percentile(active_pnls, 1), np.percentile(active_pnls, 99), 35)
+            pos_pnls = [p for p in active_pnls if p >= 0]
+            neg_pnls = [p for p in active_pnls if p < 0]
+            axes[2].hist(pos_pnls, bins=bins, color="#43A047", alpha=0.75, label=f"Wins ({m['win_count']} | Avg: +${m['avg_win']:,.1f})", edgecolor="white")
+            axes[2].hist(neg_pnls, bins=bins, color="#E53935", alpha=0.75, label=f"Losses ({m['loss_count']} | Avg: -${m['avg_loss']:,.1f})", edgecolor="white")
+            axes[2].axvline(x=0, color="black", linewidth=1.0)
+            axes[2].axvline(x=m['expectancy'], color="#FB8C00", linestyle="--", linewidth=1.5, label=f"Expectancy: +${m['expectancy']:,.1f}/trade")
+            axes[2].set_title(f"Trade PnL Distribution (Realized RRR: {m['realized_rrr']:.2f} | Win Rate: {m['win_rate']:.1f}%)", fontsize=11, fontweight="bold")
+            axes[2].set_xlabel("Dollar PnL ($)", fontsize=10)
+            axes[2].set_ylabel("Trade Count", fontsize=10)
+            axes[2].legend(loc="upper right", framealpha=0.9)
+            axes[2].grid(True, linestyle=":", alpha=0.6)
+
+        plt.tight_layout()
+        plt.show()
+
+
+class GeneticStrategyOptimizer:
+    """
+    Genetic Algorithm (GA) optimizer for finding optimal quantitative trading parameters:
+    - stop_loss: Downside barrier percentage
+    - risk_reward_ratio: Multiplier for take-profit target (take_profit = stop_loss * risk_reward_ratio)
+    - threshold: Confidence deadzone filter (avoids taking trades on micro-noise)
+    - risk_per_trade: Fixed fractional capital risk per trade
+    - max_leverage: Maximum portfolio leverage cap
+
+    Supported fitness objectives:
+    - 'composite' (default): Multi-objective balance of Sharpe, Profit Factor, and low Drawdown
+    - 'sharpe': Annualized Sharpe Ratio
+    - 'sortino': Annualized Sortino Ratio (penalizes only downside volatility)
+    - 'calmar': CAGR / Max Drawdown
+    - 'profit_factor': Gross Profit / Gross Loss
+    - 'return': Total Net Portfolio Return %
+    """
+    DEFAULT_BOUNDS = {
+        'stop_loss': (0.002, 0.015),          # 0.20% to 1.50% SL
+        'risk_reward_ratio': (1.2, 3.5),      # 1:1.2 to 1:3.5 RRR
+        'threshold': (0.0, 0.0008),           # Confidence deadzone: 0 to 8 pips
+        'risk_per_trade': (0.005, 0.04),      # 0.5% to 4.0% risk per trade
+        'max_leverage': (1.0, 5.0),           # 1x to 5x leverage cap
+    }
+
+    def __init__(
+        self,
+        predictions,
+        actual_returns,
+        param_bounds=None,
+        fitness_metric='composite',
+        population_size=50,
+        generations=35,
+        crossover_prob=0.8,
+        mutation_prob=0.2,
+        mutation_strength=0.15,
+        tournament_size=3,
+        elite_count=2,
+        min_trades=25,
+        max_drawdown_limit=0.35,
+        initial_capital=10000.0,
+        fee_per_trade=0.0001,
+        random_state=None,
+        dates=None,
+        verbose=True,
+    ):
+        self.predictions = np.asarray(predictions, dtype=np.float64).reshape(-1)
+        self.actual_returns = np.asarray(actual_returns, dtype=np.float64).reshape(-1)
+        min_len = min(len(self.predictions), len(self.actual_returns))
+        self.predictions = self.predictions[:min_len]
+        self.actual_returns = self.actual_returns[:min_len]
+        self.dates = np.asarray(dates)[:min_len] if dates is not None else None
+
+        self.param_bounds = dict(self.DEFAULT_BOUNDS if param_bounds is None else param_bounds)
+        self.gene_keys = list(self.param_bounds.keys())
+        self.lows = np.array([self.param_bounds[k][0] for k in self.gene_keys], dtype=np.float64)
+        self.highs = np.array([self.param_bounds[k][1] for k in self.gene_keys], dtype=np.float64)
+        self.n_genes = len(self.gene_keys)
+
+        self.fitness_metric = fitness_metric.lower()
+        self.pop_size = int(population_size)
+        self.generations = int(generations)
+        self.crossover_prob = float(crossover_prob)
+        self.mutation_prob = float(mutation_prob)
+        self.mutation_strength = float(mutation_strength)
+        self.tournament_size = int(tournament_size)
+        self.elite_count = max(1, int(elite_count))
+        self.min_trades = int(min_trades)
+        self.max_drawdown_limit = float(max_drawdown_limit)
+        self.initial_capital = float(initial_capital)
+        self.fee_per_trade = float(fee_per_trade)
+        self.verbose = bool(verbose)
+
+        if random_state is not None:
+            np.random.seed(random_state)
+
+        self.history = []
+        self.best_params = None
+        self.best_fitness = -float('inf')
+        self.best_individual = None
+
+    def _genes_to_params(self, individual):
+        raw = self.lows + individual * (self.highs - self.lows)
+        params = dict(zip(self.gene_keys, raw))
+        if 'take_profit' not in params and 'stop_loss' in params and 'risk_reward_ratio' in params:
+            params['take_profit'] = params['stop_loss'] * params['risk_reward_ratio']
+        return params
+
+    def evaluate_fitness(self, individual):
+        params = self._genes_to_params(individual)
+        sl = params['stop_loss']
+        rrr = params.get('risk_reward_ratio', 2.0)
+        tp = params.get('take_profit', sl * rrr)
+        thresh = params.get('threshold', 0.0)
+        rpt = params.get('risk_per_trade', 0.02)
+        lev_cap = params.get('max_leverage', 3.0)
+
+        # Fast vectorized simulation
+        signals = np.zeros_like(self.predictions)
+        signals[self.predictions > thresh] = 1
+        signals[self.predictions < -thresh] = -1
+
+        trade_mask = (signals != 0)
+        n_trades = int(np.sum(trade_mask))
+        if n_trades < self.min_trades:
+            return -999.0
+
+        raw_moves = signals[trade_mask] * self.actual_returns[trade_mask]
+        clamped_returns = np.clip(raw_moves, -sl, tp) - self.fee_per_trade
+
+        leverage = min(rpt / max(sl, 1e-5), lev_cap)
+        trade_rets = leverage * clamped_returns
+
+        # Cumulative equity and drawdown
+        cum_ret = np.cumprod(np.maximum(1.0 + trade_rets, 0.0))
+        if len(cum_ret) == 0 or cum_ret[-1] <= 0:
+            return -999.0
+
+        roll_max = np.maximum.accumulate(cum_ret)
+        dd = (cum_ret - roll_max) / (roll_max + 1e-9)
+        max_dd = float(abs(np.min(dd))) if len(dd) > 0 else 1.0
+
+        if max_dd > self.max_drawdown_limit:
+            return -999.0
+
+        wins = trade_rets[trade_rets > 0]
+        losses = trade_rets[trade_rets < 0]
+        gross_win = float(np.sum(wins)) if len(wins) > 0 else 0.0
+        gross_loss = float(abs(np.sum(losses))) if len(losses) > 0 else 1e-9
+        pf = min(gross_win / gross_loss, 20.0)
+
+        mean_ret = float(np.mean(trade_rets))
+        std_ret = float(np.std(trade_rets))
+        sharpe = (mean_ret / (std_ret + 1e-9)) * np.sqrt(252) if std_ret > 1e-9 else 0.0
+
+        downside = trade_rets[trade_rets < 0]
+        downside_std = float(np.std(downside)) if len(downside) > 0 else 1e-9
+        sortino = (mean_ret / (downside_std + 1e-9)) * np.sqrt(252)
+
+        cagr = (cum_ret[-1] ** (252 / max(len(self.actual_returns), 1)) - 1.0)
+        calmar = (cagr / (max_dd + 1e-9))
+
+        if self.fitness_metric == 'sharpe':
+            return sharpe
+        elif self.fitness_metric == 'sortino':
+            return sortino
+        elif self.fitness_metric == 'calmar':
+            return calmar
+        elif self.fitness_metric == 'profit_factor':
+            return pf
+        elif self.fitness_metric == 'return':
+            return (cum_ret[-1] - 1.0) * 100.0
+        else: # 'composite'
+            # Balanced multi-objective: Sharpe * sqrt(Profit Factor) * (1 - Drawdown penalty)
+            return sharpe * np.sqrt(pf) * (1.0 - max_dd)
+
+    def optimize(self):
+        pop = np.random.uniform(0.0, 1.0, (self.pop_size, self.n_genes))
+
+        if self.verbose:
+            print("=" * 80)
+            print("         GENETIC ALGORITHM HYPERPARAMETER OPTIMIZATION STARTING")
+            print("=" * 80)
+            print(f"Population Size : {self.pop_size} | Generations: {self.generations} | Objective: {self.fitness_metric.upper()}")
+            print(f"Optimizing Genes: {', '.join(self.gene_keys)}")
+            print("-" * 80)
+
+        for gen in range(self.generations):
+            fitnesses = np.array([self.evaluate_fitness(ind) for ind in pop])
+
+            # Elitism: find top individuals
+            sorted_indices = np.argsort(fitnesses)[::-1]
+            gen_best_idx = sorted_indices[0]
+            gen_best_fitness = fitnesses[gen_best_idx]
+            gen_best_ind = pop[gen_best_idx].copy()
+            gen_mean_fitness = float(np.mean(fitnesses[fitnesses > -900])) if np.any(fitnesses > -900) else -999.0
+
+            if gen_best_fitness > self.best_fitness:
+                self.best_fitness = gen_best_fitness
+                self.best_individual = gen_best_ind.copy()
+                self.best_params = self._genes_to_params(gen_best_ind)
+
+            # Record history
+            best_p = self._genes_to_params(gen_best_ind)
+            self.history.append({
+                'generation': gen,
+                'best_fitness': gen_best_fitness,
+                'mean_fitness': gen_mean_fitness,
+                'params': best_p,
+            })
+
+            if self.verbose and (gen % 5 == 0 or gen == self.generations - 1):
+                p_str = f"SL: {best_p['stop_loss']:.4f} | RRR: {best_p['risk_reward_ratio']:.2f} | Thresh: {best_p['threshold']:.5f} | Risk%: {best_p['risk_per_trade']*100:.2f}%"
+                print(f"Gen {gen:2d}/{self.generations} | Best Fitness: {gen_best_fitness:7.2f} (Avg: {gen_mean_fitness:6.2f}) | {p_str}")
+
+            # Reproduction
+            new_pop = []
+            for e_idx in sorted_indices[:self.elite_count]:
+                new_pop.append(pop[e_idx].copy())
+
+            while len(new_pop) < self.pop_size:
+                # Tournament Selection
+                cands1 = np.random.randint(0, self.pop_size, self.tournament_size)
+                p1 = pop[cands1[np.argmax(fitnesses[cands1])]]
+
+                cands2 = np.random.randint(0, self.pop_size, self.tournament_size)
+                p2 = pop[cands2[np.argmax(fitnesses[cands2])]]
+
+                # Blend Crossover (BLX-alpha)
+                if np.random.rand() < self.crossover_prob:
+                    alpha = 0.2
+                    gamma = (1.0 + 2.0 * alpha) * np.random.rand(self.n_genes) - alpha
+                    child = np.clip(gamma * p1 + (1.0 - gamma) * p2, 0.0, 1.0)
+                else:
+                    child = p1.copy()
+
+                # Mutation (Gaussian perturbation)
+                mut_mask = np.random.rand(self.n_genes) < self.mutation_prob
+                if np.any(mut_mask):
+                    child[mut_mask] += np.random.normal(0, self.mutation_strength, np.sum(mut_mask))
+                    child = np.clip(child, 0.0, 1.0)
+
+                new_pop.append(child)
+
+            pop = np.array(new_pop)
+
+        if self.verbose:
+            print("-" * 80)
+            print("                    GENETIC ALGORITHM OPTIMIZATION COMPLETE")
+            print(f"Best Fitness Achieved: {self.best_fitness:.4f}")
+            print("Optimal Parameters:")
+            for k, v in self.best_params.items():
+                if 'ratio' in k or 'leverage' in k:
+                    print(f"  {k:<18s}: {v:.2f}")
+                elif 'loss' in k or 'profit' in k or 'trade' in k or 'threshold' in k:
+                    print(f"  {k:<18s}: {v:.5f} ({v*100:.3f}%)")
+                else:
+                    print(f"  {k:<18s}: {v}")
+            print("=" * 80)
+
+        # Build full AdvancedProfitCalculator with the best parameters
+        best_calc = AdvancedProfitCalculator(
+            predictions=self.predictions,
+            actual_returns=self.actual_returns,
+            initial_capital=self.initial_capital,
+            stop_loss=self.best_params['stop_loss'],
+            take_profit=self.best_params.get('take_profit'),
+            risk_reward_ratio=self.best_params.get('risk_reward_ratio', 2.0),
+            threshold=self.best_params.get('threshold', 0.0),
+            risk_per_trade=self.best_params.get('risk_per_trade', 0.02),
+            fee_per_trade=self.fee_per_trade,
+            max_leverage=self.best_params.get('max_leverage', 3.0),
+            dates=self.dates,
         )
 
-    test_eval = None
-    if test_loader is not None:
-        test_eval = evaluate_torch_model_dataloader(
-            model,
-            test_loader,
-            device=device,
-            target_scaler=target_scaler,
-        )
-        store_model_prediction(
-            model_results,
-            model_name,
-            test_eval["predictions"],
-            test_eval["metrics"],
-            "test",
-            output_path=output_path,
-        )
+        return {
+            'best_params': self.best_params,
+            'best_fitness': self.best_fitness,
+            'best_calculator': best_calc,
+            'history': pd.DataFrame(self.history),
+            'optimizer': self,
+        }
 
-    return {
-        "train": train_eval,
-        "validation": val_eval,
-        "test": test_eval,
-    }
+    def plot_convergence(self, figsize=(14, 8)):
+        df = pd.DataFrame(self.history)
+        fig, axes = plt.subplots(2, 1, figsize=figsize, sharex=True)
+
+        # Panel 1: Fitness Convergence
+        axes[0].plot(df['generation'], df['best_fitness'], label="Generation Best Fitness", color="#1E88E5", linewidth=2.2)
+        axes[0].plot(df['generation'], df['mean_fitness'], label="Population Mean Fitness", color="#FF8F00", linestyle="--", linewidth=1.5)
+        axes[0].set_title(f"Genetic Algorithm Fitness Progression ({self.fitness_metric.upper()} Objective)", fontsize=12, fontweight="bold")
+        axes[0].set_ylabel("Fitness Score", fontsize=11)
+        axes[0].legend(loc="lower right", framealpha=0.9)
+        axes[0].grid(True, linestyle=":", alpha=0.6)
+
+        # Panel 2: Parameter Trajectories
+        param_names = self.gene_keys
+        colors = ["#43A047", "#8E24AA", "#00ACC1", "#E53935", "#3949AB"]
+        for i, key in enumerate(param_names):
+            vals = [h['params'][key] for h in self.history]
+            low, high = self.param_bounds[key]
+            norm_vals = [(v - low) / (high - low + 1e-9) for v in vals]
+            axes[1].plot(df['generation'], norm_vals, label=f"{key} (Final: {vals[-1]:.4f})", color=colors[i % len(colors)], linewidth=1.8)
+
+        axes[1].set_title("Normalized Parameter Evolution Over Generations [0, 1]", fontsize=11, fontweight="bold")
+        axes[1].set_xlabel("Generation", fontsize=11)
+        axes[1].set_ylabel("Normalized Gene Value", fontsize=10)
+        axes[1].legend(loc="upper left", bbox_to_anchor=(1.01, 1), framealpha=0.9)
+        axes[1].grid(True, linestyle=":", alpha=0.6)
+
+        plt.tight_layout()
+        plt.show()
+
+
+def optimize_strategy_ga(
+    predictions,
+    actual_returns,
+    param_bounds=None,
+    fitness_metric='composite',
+    population_size=50,
+    generations=35,
+    crossover_prob=0.8,
+    mutation_prob=0.2,
+    mutation_strength=0.15,
+    tournament_size=3,
+    elite_count=2,
+    min_trades=25,
+    max_drawdown_limit=0.35,
+    initial_capital=10000.0,
+    fee_per_trade=0.0001,
+    random_state=None,
+    dates=None,
+    verbose=True,
+):
+    """
+    Convenience function to run Genetic Algorithm optimization on quantitative trading strategy parameters.
+
+    Returns
+    -------
+    dict with:
+      - 'best_params': dict of optimal hyperparameters found
+      - 'best_fitness': best fitness score achieved
+      - 'best_calculator': AdvancedProfitCalculator instance with optimal params
+      - 'history': pandas DataFrame of generation metrics
+      - 'optimizer': GeneticStrategyOptimizer instance (with .plot_convergence())
+    """
+    optimizer = GeneticStrategyOptimizer(
+        predictions=predictions,
+        actual_returns=actual_returns,
+        param_bounds=param_bounds,
+        fitness_metric=fitness_metric,
+        population_size=population_size,
+        generations=generations,
+        crossover_prob=crossover_prob,
+        mutation_prob=mutation_prob,
+        mutation_strength=mutation_strength,
+        tournament_size=tournament_size,
+        elite_count=elite_count,
+        min_trades=min_trades,
+        max_drawdown_limit=max_drawdown_limit,
+        initial_capital=initial_capital,
+        fee_per_trade=fee_per_trade,
+        random_state=random_state,
+        dates=dates,
+        verbose=verbose,
+    )
+    return optimizer.optimize()

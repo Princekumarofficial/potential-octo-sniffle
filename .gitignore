@@ -6,3 +6,4 @@ model_results.json
 *.nav
 *.fls
 *.fuse*
+runs/**
