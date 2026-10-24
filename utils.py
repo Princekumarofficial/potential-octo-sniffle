@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from itertools import product
 from collections.abc import Mapping
 from pathlib import Path
@@ -2262,3 +2263,375 @@ def optimize_strategy_ga(
         verbose=verbose,
     )
     return optimizer.optimize()
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Core Forecaster Model & Directional Loss
+# ────────────────────────────────────────────────────────────────────────────
+class LSTMForecaster(nn.Module):
+    """LSTM-based time-series forecasting model with linear projection."""
+    def __init__(self, input_size, hidden_size=32, num_layers=1, dropout=0.0, output_size=1):
+        super().__init__()
+        self.lstm = nn.LSTM(
+            input_size,
+            hidden_size,
+            num_layers,
+            batch_first=True,
+            dropout=dropout if num_layers > 1 else 0.0,
+        )
+        self.dropout = nn.Dropout(dropout)
+        self.fc = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        lstm_out, (h_n, _) = self.lstm(x)
+        last_hidden = h_n[-1]
+        out = self.dropout(last_hidden)
+        out = self.fc(out)
+        return out.squeeze(-1)
+
+
+class BigMoveAwareLoss(nn.Module):
+    """
+    Directional loss function that heavily penalizes sign mismatches (wrong direction)
+    and penalizes missing large tail-risk market moves (moves >= sigma_threshold).
+    """
+    def __init__(self, dir_penalty=0.5, mag_penalty=2.0, sigma_threshold=1.5):
+        super().__init__()
+        self.mse = nn.MSELoss(reduction="none")
+        self.dir_penalty = dir_penalty
+        self.mag_penalty = mag_penalty
+        self.sigma_threshold = sigma_threshold
+
+    def forward(self, y_pred, y_true):
+        sq_error = self.mse(y_pred, y_true)
+
+        weight = 1.0 + self.mag_penalty * torch.abs(y_true)
+        big_move_mask = (torch.abs(y_true) >= self.sigma_threshold).float()
+        weight = weight + (big_move_mask * self.mag_penalty * 2.0)
+
+        weighted_mse = sq_error * weight
+
+        sign_mismatch = torch.relu(-torch.sign(y_pred) * torch.sign(y_true))
+        dir_weight = torch.abs(y_true) + (big_move_mask * 2.0)
+        dir_loss = sign_mismatch * dir_weight * self.dir_penalty
+
+        return torch.mean(weighted_mse + dir_loss)
+
+
+def train_on_split(
+    model,
+    dataloader,
+    loss_function,
+    optimizer=None,
+    epochs=10,
+    lr=1e-4,
+    device=None,
+    log_every=5,
+    clip_grad_norm=None,
+    shuffle=True,
+    split_name="data",
+):
+    """
+    Train or fine-tune a model on any DataLoader split (e.g. validation, test, or combined).
+    """
+    if isinstance(dataloader, dict):
+        for candidate in [f"{split_name}_loader", split_name, "loader"]:
+            if candidate in dataloader:
+                dataloader = dataloader[candidate]
+                break
+
+    if dataloader is None or len(dataloader) == 0:
+        raise ValueError(f"Dataloader for {split_name} is empty or None.")
+
+    target_device = device or (
+        next(model.parameters()).device
+        if list(model.parameters())
+        else (torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    )
+    model.to(target_device)
+
+    if optimizer is None:
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+
+    loader_to_use = dataloader
+    if shuffle and hasattr(dataloader, "dataset") and dataloader.dataset is not None:
+        batch_size = getattr(dataloader, "batch_size", 32)
+        loader_to_use = torch.utils.data.DataLoader(
+            dataloader.dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=getattr(dataloader, "num_workers", 0),
+            pin_memory=getattr(dataloader, "pin_memory", False),
+        )
+
+    losses = []
+    for epoch in range(epochs):
+        model.train()
+        running_loss = 0.0
+        num_batches = 0
+
+        for batch_x, batch_y in loader_to_use:
+            batch_x = batch_x.to(target_device)
+            batch_y = batch_y.to(target_device)
+
+            optimizer.zero_grad()
+            preds = model(batch_x)
+            if preds.shape != batch_y.shape:
+                if preds.ndim == 2 and preds.shape[1] == 1 and batch_y.ndim == 1:
+                    preds = preds.squeeze(1)
+                elif batch_y.ndim == 2 and batch_y.shape[1] == 1 and preds.ndim == 1:
+                    preds = preds.unsqueeze(1)
+
+            loss = loss_function(preds, batch_y)
+            loss.backward()
+            if clip_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
+            optimizer.step()
+
+            running_loss += loss.item()
+            num_batches += 1
+
+        epoch_loss = running_loss / max(num_batches, 1)
+        losses.append(epoch_loss)
+
+        if log_every and (epoch + 1) % log_every == 0:
+            print(f"[{split_name.title()} Training] Epoch {epoch + 1}/{epochs} - Loss: {epoch_loss:.5f}")
+
+    return {
+        "losses": losses,
+        "final_loss": losses[-1] if losses else None,
+    }
+
+
+def export_model(
+    model,
+    filepath,
+    trained_till="test",
+    loaders_dict=None,
+    feature_scaler=None,
+    target_scaler=None,
+    feature_columns=None,
+    target_column=None,
+    window_size=None,
+    metadata=None,
+    verbose=True,
+):
+    """
+    Export a trained model checkpoint along with feature and target scalers,
+    feature columns, target column name, window size, and training metadata.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Trained PyTorch model to export.
+    filepath : str or Path
+        Destination path for the exported .pt checkpoint file.
+    trained_till : str, default='test'
+        Description or label of data split up to which the model was trained
+        (e.g. 'train', 'validation', 'test', 'all').
+    loaders_dict : dict, optional
+        Dictionary returned by create_time_series_dataloaders containing scalers,
+        feature columns, target column, and window size.
+    feature_scaler : StandardScaler, optional
+        Fitted feature scaler (auto-extracted from loaders_dict if provided).
+    target_scaler : StandardScaler, optional
+        Fitted target scaler (auto-extracted from loaders_dict if provided).
+    feature_columns : list of str, optional
+        List of input feature names.
+    target_column : str, optional
+        Target asset/price column name.
+    window_size : int, optional
+        Sequence lookback window size.
+    metadata : dict, optional
+        Additional metadata (metrics, GA hyperparameters, description, etc.).
+    verbose : bool, default=True
+        Whether to print export details.
+
+    Returns
+    -------
+    Path
+        Absolute path to the exported checkpoint.
+    """
+    filepath = Path(filepath)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+
+    if loaders_dict is not None and isinstance(loaders_dict, dict):
+        if feature_scaler is None:
+            feature_scaler = loaders_dict.get("feature_scaler")
+        if target_scaler is None:
+            target_scaler = loaders_dict.get("target_scaler")
+        if feature_columns is None:
+            feature_columns = loaders_dict.get("feature_columns")
+        if target_column is None:
+            target_column = loaders_dict.get("target_column")
+        if window_size is None:
+            window_size = loaders_dict.get("window_size")
+
+    model_config = {}
+    if hasattr(model, "lstm"):
+        model_config = {
+            "input_size": model.lstm.input_size,
+            "hidden_size": model.lstm.hidden_size,
+            "num_layers": model.lstm.num_layers,
+            "dropout": model.lstm.dropout,
+            "output_size": model.fc.out_features if hasattr(model, "fc") else 1,
+        }
+    elif feature_columns is not None:
+        model_config = {
+            "input_size": len(feature_columns),
+            "hidden_size": 32,
+            "num_layers": 1,
+            "dropout": 0.0,
+            "output_size": 1,
+        }
+
+    checkpoint = {
+        "model_state_dict": {k: v.cpu().clone() for k, v in model.state_dict().items()},
+        "model_class_name": model.__class__.__name__,
+        "model_config": model_config,
+        "feature_scaler": feature_scaler,
+        "target_scaler": target_scaler,
+        "feature_columns": list(feature_columns) if feature_columns is not None else None,
+        "target_column": target_column,
+        "window_size": int(window_size) if window_size is not None else None,
+        "trained_till": str(trained_till),
+        "exported_at": datetime.now().isoformat(),
+        "metadata": metadata or {},
+    }
+
+    torch.save(checkpoint, filepath)
+    if verbose:
+        print(f"Model successfully exported to: {filepath.resolve()}")
+        print(f"  Trained Till   : {checkpoint['trained_till']}")
+        print(f"  Architecture   : {checkpoint['model_class_name']} ({model_config})")
+        print(f"  Features ({len(feature_columns) if feature_columns else 0}) : {feature_columns[:5] if feature_columns else 'None'}...")
+        print(f"  Target         : {target_column}")
+        print(f"  Window Size    : {window_size}")
+
+    return filepath
+
+
+def load_model(
+    filepath,
+    device=None,
+    model_class=None,
+    eval_mode=True,
+    verbose=True,
+):
+    """
+    Load an exported model checkpoint, restore weights, instantiate architecture,
+    and unpack fitted scalers and feature metadata.
+
+    Parameters
+    ----------
+    filepath : str or Path
+        Path to the exported .pt checkpoint file.
+    device : torch.device or str, optional
+        Target device ('cuda', 'mps', or 'cpu'). Auto-detected if None.
+    model_class : class, optional
+        Model class to instantiate. Defaults to LSTMForecaster.
+    eval_mode : bool, default=True
+        Whether to set the model to evaluation mode (model.eval()).
+    verbose : bool, default=True
+        Whether to print loading summary.
+
+    Returns
+    -------
+    dict
+        Dictionary containing:
+        - 'model': Restored PyTorch model in eval mode on target device
+        - 'feature_scaler': Fitted StandardScaler for scaling raw inputs
+        - 'target_scaler': Fitted StandardScaler for denormalizing predictions
+        - 'feature_columns': List of expected feature columns
+        - 'target_column': Target column name
+        - 'window_size': Lookback window size
+        - 'trained_till': Data split milestone reached during training
+        - 'model_config': Architecture parameters
+        - 'metadata': User metadata saved with the model
+        - 'predict': Inference helper function predict(raw_data) returning predicted return
+    """
+    filepath = Path(filepath)
+    if not filepath.exists():
+        raise FileNotFoundError(f"Exported model checkpoint not found: {filepath.resolve()}")
+
+    target_device = device or (
+        torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    )
+
+    checkpoint = torch.load(filepath, map_location=target_device, weights_only=False)
+
+    model_config = checkpoint.get("model_config", {})
+    cls = model_class or LSTMForecaster
+
+    try:
+        model = cls(**model_config)
+    except Exception:
+        input_size = model_config.get("input_size", len(checkpoint.get("feature_columns", [])))
+        hidden_size = model_config.get("hidden_size", 32)
+        model = cls(input_size=input_size, hidden_size=hidden_size)
+
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.to(target_device)
+    if eval_mode:
+        model.eval()
+
+    feature_scaler = checkpoint.get("feature_scaler")
+    target_scaler = checkpoint.get("target_scaler")
+    window_size = checkpoint.get("window_size", 10)
+    feature_cols = checkpoint.get("feature_columns")
+
+    def predict(input_data):
+        """
+        Run inference on raw unscaled input data (DataFrame or 2D array of shape (window_size, num_features)).
+        Returns the denormalized predicted return.
+        """
+        model.eval()
+        if isinstance(input_data, pd.DataFrame):
+            if feature_cols:
+                input_data = input_data[feature_cols]
+            arr = input_data.to_numpy(dtype=np.float32)
+        else:
+            arr = np.asarray(input_data, dtype=np.float32)
+
+        if arr.ndim == 2:
+            arr = arr[-window_size:]
+            if feature_scaler is not None:
+                arr = feature_scaler.transform(arr)
+            tensor_x = torch.as_tensor(arr, dtype=torch.float32, device=target_device).unsqueeze(0)
+        elif arr.ndim == 3:
+            tensor_x = torch.as_tensor(arr, dtype=torch.float32, device=target_device)
+        else:
+            raise ValueError("input_data must have 2 dimensions (window_size, features) or 3 (batch, window, features)")
+
+        with torch.no_grad():
+            raw_pred = model(tensor_x).cpu().numpy().reshape(-1, 1)
+
+        if target_scaler is not None:
+            denorm_pred = target_scaler.inverse_transform(raw_pred).flatten()
+        else:
+            denorm_pred = raw_pred.flatten()
+
+        return denorm_pred[0] if len(denorm_pred) == 1 else denorm_pred
+
+    result = {
+        "model": model,
+        "feature_scaler": feature_scaler,
+        "target_scaler": target_scaler,
+        "feature_columns": feature_cols,
+        "target_column": checkpoint.get("target_column"),
+        "window_size": window_size,
+        "trained_till": checkpoint.get("trained_till"),
+        "model_config": model_config,
+        "metadata": checkpoint.get("metadata", {}),
+        "exported_at": checkpoint.get("exported_at"),
+        "predict": predict,
+    }
+
+    if verbose:
+        print(f"Model successfully loaded from: {filepath.name}")
+        print(f"  Trained Till : {result['trained_till']}")
+        print(f"  Target       : {result['target_column']}")
+        print(f"  Device       : {target_device}")
+        print(f"  Window Size  : {result['window_size']}")
+
+    return result

@@ -51,6 +51,7 @@ from utils import (
     optimize_strategy_ga,
     prepare_data,
     train_torch_model_dataloader,
+    train_on_val_data,
 )
 
 
@@ -198,6 +199,9 @@ class GeneralTrainer:
         patience=10,
         train_fraction=0.8,
         val_fraction=0.1,
+        train_on_val=False,
+        val_epochs=15,
+        val_lr=1e-4,
         dir_penalty=0.5,
         mag_penalty=2.0,
         sigma_threshold=1.5,
@@ -231,6 +235,9 @@ class GeneralTrainer:
         self.patience = patience
         self.train_fraction = train_fraction
         self.val_fraction = val_fraction
+        self.train_on_val = train_on_val
+        self.val_epochs = val_epochs
+        self.val_lr = val_lr
         self.dir_penalty = dir_penalty
         self.mag_penalty = mag_penalty
         self.sigma_threshold = sigma_threshold
@@ -451,6 +458,22 @@ class GeneralTrainer:
             early_stopping_patience=self.patience,
         )
         self._log("Model training completed. Best validation weights restored.")
+
+        # Stage 2 (Optional): Train / fine-tune on validation data
+        if self.train_on_val and self.val_epochs > 0 and self.loaders.get("val_loader"):
+            self._log(f"\n--- Fine-tuning model on Validation Data ({self.val_epochs} epochs, lr={self.val_lr}) ---")
+            val_history = train_on_val_data(
+                model=self.model,
+                val_loader=self.loaders["val_loader"],
+                loss_function=loss_fn,
+                epochs=self.val_epochs,
+                lr=self.val_lr,
+                device=self.device,
+                log_every=max(1, self.val_epochs // 3) if self.verbose else 0,
+                shuffle=True,
+            )
+            self.training_history["val_train_losses"] = val_history.get("val_train_losses", [])
+
         return self.model, self.training_history
 
     # ────────────────────────────────────────────────────────────────────────
@@ -1014,6 +1037,9 @@ def main():
     parser.add_argument("--ga_pop", type=int, default=40, help="GA population size (default: 40)")
     parser.add_argument("--ga_gen", type=int, default=25, help="GA generations (default: 25)")
     parser.add_argument("--capital", type=float, default=10000.0, help="Initial trading capital (default: 10000)")
+    parser.add_argument("--train_on_val", action="store_true", help="Fine-tune model on validation data before testing")
+    parser.add_argument("--val_epochs", type=int, default=15, help="Epochs to train on validation data (default: 15)")
+    parser.add_argument("--val_lr", type=float, default=0.0001, help="Learning rate for validation training (default: 0.0001)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
 
     args = parser.parse_args()
@@ -1032,6 +1058,9 @@ def main():
         ga_population_size=args.ga_pop,
         ga_generations=args.ga_gen,
         initial_capital=args.capital,
+        train_on_val=args.train_on_val,
+        val_epochs=args.val_epochs,
+        val_lr=args.val_lr,
         random_state=args.seed,
     )
     trainer.train()
