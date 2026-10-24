@@ -1,0 +1,121 @@
+{
+  "initial_capital": 10000.0,
+  "final_portfolio_value": 10381.860073832388,
+  "strategy_net_return_pct": 3.8186007383238754,
+  "benchmark_return_pct": -1.6126692349437508,
+  "strategy_alpha_pct": 5.431269973267626,
+  "annualized_cagr_pct": 15.637205186159653,
+  "total_days_evaluated": 65,
+  "total_trades_executed": 48,
+  "long_trades": 42,
+  "short_trades": 6,
+  "neutral_days": 17,
+  "winning_trades": 21,
+  "losing_trades": 27,
+  "win_rate_pct": 43.75,
+  "average_win_dollar": 120.27720996627109,
+  "average_loss_dollar": 79.40597538738187,
+  "realized_risk_reward": 1.5147123296389093,
+  "gross_profit": 2525.821409291693,
+  "gross_loss": 2143.9613354593107,
+  "profit_factor": 1.1781095897191516,
+  "trade_expectancy": 7.955418204841294,
+  "max_drawdown_pct": -5.202207704229524,
+  "annualized_sharpe": 1.1036760163658674,
+  "annualized_sortino": 3.593746450763952,
+  "calmar_ratio": 3.005878672134951,
+  "exit_reasons": {
+    "EOD_CLOSE": 29,
+    "SL": 17,
+    "NO_TRADE": 17,
+    "TP": 2
+  },
+  "strategy_parameters": {
+    "stop_loss": 0.002,
+    "risk_reward_ratio": 3.5,
+    "threshold": 0.00020870485502537606,
+    "risk_per_trade": 0.02429124445891184,
+    "max_leverage": 5.0,
+    "take_profit": 0.007
+  },
+  "retraining_events": [
+    {
+      "step": 10,
+      "date": "2026-08-10",
+      "loss": 1.5572459868022375,
+      "updated_params": {
+        "stop_loss": 0.002,
+        "risk_reward_ratio": 3.5,
+        "threshold": 4.119549861057288e-05,
+        "risk_per_trade": 0.01861139055567014,
+        "max_leverage": 5.0,
+        "take_profit": 0.007
+      }
+    },
+    {
+      "step": 20,
+      "date": "2026-08-24",
+      "loss": 1.404649087360927,
+      "updated_params": {
+        "stop_loss": 0.002006309731800944,
+        "risk_reward_ratio": 3.5,
+        "threshold": 1.930869002197711e-05,
+        "risk_per_trade": 0.026155767201226757,
+        "max_leverage": 4.972975471769395,
+        "take_profit": 0.007022084061303304
+      }
+    },
+    {
+      "step": 30,
+      "date": "2026-09-07",
+      "loss": 1.2833636701107025,
+      "updated_params": {
+        "stop_loss": 0.002,
+        "risk_reward_ratio": 3.5,
+        "threshold": 2.7563210144890767e-05,
+        "risk_per_trade": 0.013437738090231077,
+        "max_leverage": 4.801023674448365,
+        "take_profit": 0.007
+      }
+    },
+    {
+      "step": 40,
+      "date": "2026-09-21",
+      "loss": 1.098030379840306,
+      "updated_params": {
+        "stop_loss": 0.002,
+        "risk_reward_ratio": 3.4868738403002544,
+        "threshold": 1.8968533138062837e-05,
+        "risk_per_trade": 0.03584202421899118,
+        "max_leverage": 4.983750065757615,
+        "take_profit": 0.006973747680600509
+      }
+    },
+    {
+      "step": 50,
+      "date": "2026-10-05",
+      "loss": 1.160542560475213,
+      "updated_params": {
+        "stop_loss": 0.002,
+        "risk_reward_ratio": 3.5,
+        "threshold": 0.0005029644662806556,
+        "risk_per_trade": 0.04,
+        "max_leverage": 5.0,
+        "take_profit": 0.007
+      }
+    },
+    {
+      "step": 60,
+      "date": "2026-10-19",
+      "loss": 1.1137056648731232,
+      "updated_params": {
+        "stop_loss": 0.0020000015018572016,
+        "risk_reward_ratio": 3.5,
+        "threshold": 0.0005869720923156081,
+        "risk_per_trade": 0.011160076716612264,
+        "max_leverage": 4.855071284683675,
+        "take_profit": 0.007000005256500206
+      }
+    }
+  ]
+}
