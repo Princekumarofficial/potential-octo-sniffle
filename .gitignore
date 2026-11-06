@@ -7,3 +7,5 @@ model_results.json
 *.fls
 *.fuse*
 runs/**
+/full_predictor/__pycache__/
+/full_predictor/datasets/
