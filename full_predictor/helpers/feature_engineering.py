@@ -1,6 +1,6 @@
-"""Causal, gap-aware OHLCV features used by eda.ipynb.
+"""Gap-aware OHLCV features used by eda.ipynb.
 
-No imputation or scaling. Intraday indicators reset at session/gap boundaries.
+Short gaps use retrospective averaging. Intraday indicators reset at remaining gaps.
 Daily GARCH forecasts use earlier daily closes only. See FEATURES.md.
 """
 from pathlib import Path
@@ -12,6 +12,35 @@ from arch import arch_model
 
 EXCLUDED_STOCKS = {"IRFC", "HDFCLIFE", "SBILIFE"}
 RAW = ["open", "high", "low", "close", "volume"]
+MISSING_POLICY = "Fill 1-3 absent bars with the mean of equally many observed bars on each side."
+CALENDAR_PATH = Path("eda/eda_outputs/expected_market_minutes.csv")
+
+
+def fill_short_gaps(frame):
+    """Fill an n-minute gap with one OHLCV mean from n valid bars on each side."""
+    missing = frame.is_missing_bar.to_numpy()
+    observed_valid = frame.is_valid_bar.to_numpy(copy=True) & ~missing
+    values = frame[RAW].to_numpy(dtype=float, copy=True)
+    filled = np.zeros(len(frame), dtype=bool)
+    boundaries = np.flatnonzero(np.diff(np.r_[False, missing, False]))
+    for start, stop in boundaries.reshape(-1, 2):
+        length = stop - start
+        left, right = start - length, stop + length
+        if length > 3 or left < 0 or right > len(frame):
+            continue
+        if not (observed_valid[left:start].all() and observed_valid[stop:right].all()):
+            continue
+        timestamps = frame.index[left:right]
+        if timestamps[0].date() != timestamps[-1].date():
+            continue
+        if not (timestamps[1:] - timestamps[:-1] == pd.Timedelta(minutes=1)).all():
+            continue
+        values[start:stop] = np.concatenate((values[left:start], values[stop:right])).mean(axis=0)
+        filled[start:stop] = True
+    frame[RAW] = values
+    frame["is_imputed_bar"] = filled
+    frame["is_valid_bar"] = observed_valid | filled
+    return frame
 
 
 def align_stock(path, expected_index):
@@ -154,7 +183,7 @@ def add_features(frame, include_garch=True):
     records = []
     if include_garch:
         out["garch_daily_volatility"] , records = daily_garch(out)
-    feature_cols = [c for c in out if c not in RAW + ["is_missing_bar","is_valid_bar","segment_id"]]
+    feature_cols = [c for c in out if c not in RAW + ["is_missing_bar","is_imputed_bar","is_valid_bar","segment_id"]]
     # Entire feature rows remain NaN for absent or invalid observations.
     out.loc[~valid,feature_cols] = np.nan
     return out, feature_cols, records
@@ -165,7 +194,8 @@ def validate_features(frame, features):
         raise AssertionError("Feature timestamps must be unique and sorted")
     if np.isinf(frame[RAW+features].to_numpy()).any():
         raise AssertionError("Infinite raw or feature values")
-    if not frame.loc[frame.is_missing_bar,RAW].isna().all().all():
+    imputed = frame.get("is_imputed_bar", False)
+    if not frame.loc[frame.is_missing_bar & ~np.asarray(imputed),RAW].isna().all().all():
         raise AssertionError("Missing raw bars were filled")
     if not frame.loc[~frame.is_valid_bar,features].isna().all().all():
         raise AssertionError("Features populated on missing/invalid bars")
@@ -195,6 +225,9 @@ def _transform_one(args):
     path, grid_path, output = map(Path,args)
     grid = pd.DatetimeIndex(pd.read_csv(grid_path,parse_dates=["date"]).date)
     aligned,audit = align_stock(path,grid)
+    fill_short_gaps(aligned)
+    audit["imputed_bars"] = int(aligned.is_imputed_bar.sum())
+    audit["remaining_missing_bars"] = audit["missing_bars"] - audit["imputed_bars"]
     transformed,features,records = add_features(aligned)
     report = validate_features(transformed,features)
     report.insert(0,"stock",path.stem)
@@ -218,11 +251,11 @@ def write_feature_manifest(base_dir, summary):
     sources = [base_dir/"datasets/NIFTY50"/f"{stock}.csv" for stock in summary.stock]
     manifest = dict(
         stocks=summary.stock.tolist(), excluded_stocks=sorted(EXCLUDED_STOCKS),
-        calendar_sha256=hashlib.sha256((base_dir/"eda_outputs/expected_market_minutes.csv").read_bytes()).hexdigest(),
+        calendar_sha256=hashlib.sha256((base_dir / CALENDAR_PATH).read_bytes()).hexdigest(),
         feature_code_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        missing_policy="retain NaN; no imputation or row dropping",
+        missing_policy=MISSING_POLICY,
         indicator_reset="session boundary, timestamp gap, missing or invalid bar",
-        feature_availability="current bar close; use for future targets",
+        feature_availability="Retrospective. Filled bars and dependent features may use later observations.",
         garch=dict(frequency="daily", model="zero-mean Gaussian GARCH(1,1)",
                    refit="monthly", minimum_returns=60, maximum_returns=252,
                    units="decimal daily return standard deviation"),
@@ -241,7 +274,7 @@ def transform_all(base_dir, stocks=None, workers=1):
              if p.stem not in EXCLUDED_STOCKS and (stocks is None or p.stem in stocks)]
     if not paths:
         raise ValueError("No eligible input stocks")
-    tasks = [(p,base_dir/"eda_outputs/expected_market_minutes.csv",output) for p in paths]
+    tasks = [(p, base_dir / CALENDAR_PATH, output) for p in paths]
     executor = ProcessPoolExecutor(max_workers=workers) if workers>1 else None
     results = executor.map(_transform_one,tasks) if executor else map(_transform_one,tasks)
     summaries,quality,fits = [],[],[]
@@ -265,4 +298,4 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workers",type=int,default=1)
     args = parser.parse_args()
-    transform_all(Path(__file__).resolve().parent,workers=args.workers)
+    transform_all(Path(__file__).resolve().parents[1],workers=args.workers)

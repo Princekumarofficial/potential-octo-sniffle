@@ -1,6 +1,6 @@
 {
   "input_dir": "C:\\Users\\xprin\\Desktop\\AIML\\BTP\\full_predictor\\datasets\\NIFTY50",
-  "output_dir": "C:\\Users\\xprin\\Desktop\\AIML\\BTP\\full_predictor\\eda_outputs",
+  "output_dir": "C:\\Users\\xprin\\Desktop\\AIML\\BTP\\full_predictor\\eda\\eda_outputs",
   "stocks": [
     "ABB",
     "ADANIENSOL",

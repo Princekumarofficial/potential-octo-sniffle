@@ -1,21 +1,21 @@
 # Data transformation flow
 
-1. **Read the inputs.** Load one OHLCV CSV per stock from `datasets/NIFTY50/`. Use the expected minute timestamps in `eda_outputs/expected_market_minutes.csv` as the reference calendar. Exclude IRFC, HDFCLIFE, and SBILIFE.
-2. **Align each stock to the calendar.** Parse and sort timestamps, check for duplicates, and reindex from the stock’s first through last observed date. Keep only timestamps on the reference grid. Mark missing and invalid bars separately. Missing OHLCV values stay NaN.
-3. **Build continuous segments.** Start a new segment at each session boundary, timestamp gap, or missing or invalid bar. This prevents minute returns and rolling indicators from spanning gaps.
-4. **Calculate 35 features.** Within each segment, compute simple and log returns, SMA and EMA, RSI, Bollinger Bands, trend and slope, MACD, rolling minute volatility, and volume features. Fit a daily GARCH(1,1) model using prior daily returns and attach each session’s forecast to its valid minute bars. Keep warm-up values and unavailable forecasts as NaN.
-5. **Validate and save.** Check timestamp order and uniqueness, NaN preservation, feature ranges, and return alignment. Write one Parquet file per stock to `processed_datasets/NIFTY50/`, then reload each file and verify that its values and missing entries match the transformed data.
+1. Read stock CSVs from `datasets/NIFTY50/` and the minute calendar from `eda/eda_outputs/expected_market_minutes.csv`. Exclude IRFC, HDFCLIFE, and SBILIFE.
+2. Sort timestamps, reject duplicates, and align each stock to the grid within its observed date range. Flag absent and invalid bars.
+3. Fill eligible gaps of 1–3 minutes with the per-column OHLCV mean of equally many observed, valid bars on each side. The entire neighborhood must be consecutive and within one session. Other gaps stay NaN.
+4. Calculate indicators and the daily GARCH forecast. Preserve indicator warm-up NaNs.
+5. Validate and save one Parquet file per stock in `processed_datasets/NIFTY50/`. Reload each file and verify its values and null mask.
 
-The completed build contains **97 Parquet files, 87,398,865 rows, and 102,724 missing bars preserved as NaN**. The parent `processed_datasets/` folder contains the validation summary, per-feature NaN counts, GARCH fit audit, and run manifest. See [FEATURES.md](FEATURES.md) for formulas and rebuild instructions.
+Two-sided fills can influence indicators after a gap. The forecasting datasets reconstruct features from observed bars. See [Data loaders](DATA_LOADERS.md) and the [feature reference](FEATURES.md).
 
-## Reproduce the build
+## Rebuild and verify
 
-1. From the `BTP` repository root, make sure the raw CSVs and saved minute calendar from step 1 are in place under `full_predictor/`. Use the same inputs and the dependency versions recorded in `full_predictor/processed_datasets/feature_manifest.json` to reproduce the existing build.
-2. Run the transformation directly from PowerShell using the project environment.
+From inside `full_predictor`, activate a Python environment with NumPy, pandas, arch, and pyarrow.
 
-   ```powershell
-   .\.venv\Scripts\python.exe -m full_predictor.feature_engineering --workers 3
-   ```
+```powershell
+python -m helpers.feature_engineering --workers 3
+```
 
-   The environment needs NumPy, pandas, `arch`, and `pyarrow`. Use `--workers 1` to reduce memory use. The command uses the saved calendar and replaces the generated Parquet files and reports.
-3. Check `full_predictor/processed_datasets/feature_validation.csv`. With the same inputs, expect 97 rows marked `passed` and a total of 102,724 missing bars across the 97 stock files.
+Use one worker to reduce memory use. The command replaces generated stock files and reports. The transformation cell in the [EDA notebook](../eda/eda.ipynb) also supports rebuilding.
+
+In `processed_datasets/feature_validation.csv`, check the validation status and confirm that `missing_bars` equals `imputed_bars + remaining_missing_bars` for each stock. Review the NaN report for feature coverage and the manifest for the calendar fingerprint and imputation policy.

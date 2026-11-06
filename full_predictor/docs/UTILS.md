@@ -82,7 +82,7 @@ to the model's device.
 ## Training example
 
 This example uses an existing numeric DataFrame named `df` with a chronological
-index and a `Close` column. CSV loading belongs in `data_loaders.py`.
+index and a `Close` column. For processed Parquet files and gap-aware datasets, see [Data loaders](DATA_LOADERS.md).
 
 ```python
 import torch
@@ -146,6 +146,10 @@ leakage-free forecasting benchmarks without correcting their alignment/fill poli
 - `AdvancedProfitCalculator(predictions, actual_returns, ...)` simulates a strategy
   with position sizing, fees, spread, thresholds, and stop/take-profit settings.
   Use `summary()` for printed statistics and `plot()` for charts.
+  For one-minute close-to-close targets, pass `minute_bars=True`. This exits at
+  the next close and charges one round-trip fee per active signal. The benchmark
+  compounds the sampled returns on the long side. The summary reports total
+  fees and period drawdown and omits annualized ratios.
 - `GeneticStrategyOptimizer(predictions, actual_returns, ...)` searches strategy
   parameters. `optimize()` returns the best parameters, fitness, calculator,
   history, and optimizer; `plot_convergence()` plots progress.

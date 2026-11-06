@@ -1,53 +1,22 @@
-# Feature dataset
+# Feature reference
 
-The feature section of `eda.ipynb` produces one Parquet file per stock in
-`processed_datasets/NIFTY50/`. The current build covers **97 stocks, 87.4 million
-minute rows, and 35 features**. It excludes IRFC, HDFCLIFE, and SBILIFE.
+The transformation writes one Parquet file per stock to `processed_datasets/NIFTY50/`.
+For inputs, rebuild instructions, and validation reports, see [Transformation flow](DATA_TRANSFORMATION_FLOW.md).
 
-- **Indicators.** SMA, EMA, RSI, Bollinger Bands, trend and slope, simple and log
-  returns, MACD, rolling minute volatility, and volume features. Intraday indicators
-  restart at session boundaries and after missing or invalid bars.
-- **Volatility.** The daily GARCH(1,1) forecast uses prior daily returns and is
-  attached to each valid minute of the forecast session. The rolling volatility
-  feature is calculated separately from minute returns.
-- **Missing data.** All 102,724 missing minute bars remain NaN. Indicator warm-up
-  and unavailable GARCH forecasts also remain NaN. Features are available at bar
-  close for predicting later bars.
-- **Validation.** All 97 files passed timestamp, feature range, gap, and Parquet
-  round-trip checks. Nine GARCH fits failed and their unavailable forecasts remain
-  NaN. See `feature_validation.csv`, `feature_nan_report.csv`, and
-  `garch_fit_audit.csv` in `processed_datasets/` for details.
+## Missing bars and feature timing
 
-## Run or rebuild
+The expected market-minute grid covers each stock's observed date range. Eligible gaps of one to three minutes use a per-column OHLCV average of equally many consecutive, valid observed bars before and after the gap, within the same session. Other gaps remain NaN. Invalid observed bars retain their source values and have NaN indicators.
 
-Run the feature-engineering section of `eda.ipynb`, or call
-`feature_engineering.transform_all(base_dir)`. Requires pandas, NumPy, arch and
-pyarrow. Outputs are under `processed_datasets/NIFTY50`, one Parquet per stock.
-IRFC, HDFCLIFE and SBILIFE are excluded. Raw CSVs are never modified.
+| Metadata | Meaning |
+| --- | --- |
+| `is_missing_bar` | Timestamp was absent in the source, including rows filled later. |
+| `is_imputed_bar` | The short-gap policy filled the bar. |
+| `is_valid_bar` | The bar is usable for feature calculation, including eligible fills. |
+| `segment_id` | Continuous run used for intraday feature calculations. |
 
-The notebook loads existing results by default; set `REBUILD_FEATURE_DATA=True`
-to regenerate them after changing the inputs, calendar, or implementation.
-For parallel CPU processing from the project root, run
-`python -m full_predictor.feature_engineering --workers 3`.
+Intraday indicators restart at session boundaries, timestamp gaps, and missing or invalid bars. The first 99 bars of a full segment are warm-up for SMA100. Feature NaNs can also arise from zero denominators and unavailable GARCH forecasts.
 
-## Missing data and timing
-
-The saved `eda_outputs/expected_market_minutes.csv` defines the inferred market
-calendar. Each stock is reindexed to this grid between its first and last observed
-dates. Missing OHLCV values remain NaN. No rows are dropped after feature creation,
-no price interpolation is performed, and missing volume is not set to zero.
-Off-grid/out-of-session rows are excluded and counted. Duplicate timestamps fail
-explicitly. Invalid observed bars are preserved but their features are NaN.
-
-`is_missing_bar`, `is_valid_bar`, and `segment_id` are metadata, not prices.
-Intraday features restart after an invalid/missing bar, a nonconsecutive minute,
-or a new session. Warm-up NaNs are intentional. Do not pass all columns blindly
-to a model or globally drop NaNs and then construct row-based sequences: training
-windows must respect segment boundaries and have observed targets.
-
-All features use information available at the **close of the current bar**.
-They are inputs for future targets, not predictions of the current bar. The
-dataset has no shifted target, normalization, or train/test split yet.
+Two-sided fills use later observations and can influence subsequent indicators. For forecasting, the window datasets mask those fills and rebuild indicators using observed bars. See [Data loaders](DATA_LOADERS.md).
 
 ## Definitions
 
@@ -77,7 +46,7 @@ dataset has no shifted target, normalization, or train/test split yet.
 ## GARCH fitting
 
 This is a **daily**, not minute-level, GARCH(1,1), zero-mean Gaussian model.
-It uses the scheduled final minute's observed close. A missing final close stays
+It uses the scheduled final minute's valid close. A missing final close stays
 missing; it is not replaced by an earlier close. Daily returns span consecutive
 scheduled sessions, including overnight changes, unlike the intraday returns.
 
@@ -96,18 +65,17 @@ This CPU implementation does not require or use CUDA.
 
 ## Validation artifacts
 
-- `feature_validation.csv`: stock-level row counts, missing/invalid rows, complete
+- `feature_validation.csv`: stock-level row counts, missing, imputed, remaining missing, and invalid rows, complete
   feature rows, available GARCH rows, and serialization validation status.
 - `feature_nan_report.csv`: per-feature NaN and finite counts, including NaNs on
-  observed valid bars (warm-up, zero denominators, or unavailable GARCH).
+  valid bars (warm-up, zero denominators, or unavailable GARCH).
 - `garch_fit_audit.csv`: fit dates, final historical dates, sample counts,
   parameters, warnings and failures.
 - `feature_manifest.json`: stock universe, source metadata, calendar/code hashes,
   feature policies, GARCH settings and dependency versions.
 
-Checks enforce sorted unique timestamps, preserved missing raw rows, NaN features
+Checks enforce sorted unique timestamps, preserved unfilled missing raw rows, NaN features
 on invalid bars, no infinities, RSI/trend bounds, Bollinger ordering, nonnegative
 volatility, consistent returns, no cross-segment returns, and exact Parquet
 round-trip values/null masks. Synthetic validation additionally checks linear
-trend slope, flat-price behavior, gap warm-up, and prefix invariance: adding
-future data does not change existing feature values or GARCH forecasts.
+trend slope, flat-price behavior, gap warm-up, and prefix invariance for indicators computed from observed bars and for daily GARCH forecasts.

@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 
@@ -789,6 +788,7 @@ class AdvancedProfitCalculator:
         dates=None,                  # Optional datetime index for plotting
         high_returns=None,           # Optional intraday max excursion (High - Open) / Open
         low_returns=None,            # Optional intraday min excursion (Low - Open) / Open
+        minute_bars=False,           # Close-to-close trades on sampled one-minute returns
     ):
         self.predictions = np.asarray(predictions, dtype=np.float64).reshape(-1)
         self.actual_returns = np.asarray(actual_returns, dtype=np.float64).reshape(-1)
@@ -800,6 +800,7 @@ class AdvancedProfitCalculator:
         self.risk_per_trade = float(risk_per_trade)
         self.fee_per_trade = float(fee_per_trade)
         self.max_leverage = float(max_leverage)
+        self.minute_bars = minute_bars
         self.use_fixed_fraction = bool(use_fixed_fraction)
         self.atr = np.asarray(atr, dtype=np.float64).reshape(-1) if atr is not None else None
         self.dates = np.asarray(dates) if dates is not None else None
@@ -868,7 +869,10 @@ class AdvancedProfitCalculator:
             raw_move = signal * actual
 
             # Barrier evaluation
-            if raw_move >= cur_tp:
+            if self.minute_bars:
+                trade_ret = raw_move
+                exit_reason = 'CLOSE'
+            elif raw_move >= cur_tp:
                 trade_ret = cur_tp
                 exit_reason = 'TP'
             elif raw_move <= -cur_sl:
@@ -991,6 +995,10 @@ class AdvancedProfitCalculator:
             'close_hits': sum(1 for t in active_trades if t['exit'] == 'CLOSE'),
             'drawdowns': drawdowns,
         }
+        if self.minute_bars:
+            for key in ('cagr_pct', 'sharpe_ratio', 'sortino_ratio', 'calmar_ratio'):
+                self.metrics[key] = None
+            self.metrics['fees_paid'] = sum(t['position_size'] for t in active_trades) * self.fee_per_trade
 
     def summary(self):
         m = self.metrics
@@ -1001,9 +1009,13 @@ class AdvancedProfitCalculator:
         print(f"  Initial Capital        : ${m['initial_capital']:,.2f}")
         print(f"  Final Portfolio Value  : ${m['final_equity']:,.2f}")
         print(f"  Strategy Net Return    : {m['strategy_return_pct']:+.2f}%")
-        print(f"  Benchmark (Buy & Hold) : {m['benchmark_return_pct']:+.2f}%")
+        benchmark = 'Long on sampled bars' if self.minute_bars else 'Benchmark (Buy & Hold)'
+        print(f"  {benchmark:<23}: {m['benchmark_return_pct']:+.2f}%")
         print(f"  Strategy Alpha         : {m['alpha_pct']:+.2f}%")
-        print(f"  Annualized CAGR        : {m['cagr_pct']:+.2f}%")
+        if self.minute_bars:
+            print(f"  Total Round-trip Fees  : ${m['fees_paid']:,.2f}")
+        else:
+            print(f"  Annualized CAGR        : {m['cagr_pct']:+.2f}%")
         print("-" * 80)
         print(f"TRADE EXECUTION & WIN/LOSS METRICS:")
         print(f"  Total Trades Executed  : {m['total_trades']} (Long: {m['long_trades']}, Short: {m['short_trades']}, Neutral: {m['neutral_days']})")
@@ -1019,6 +1031,11 @@ class AdvancedProfitCalculator:
         print("-" * 80)
         print(f"RISK-ADJUSTED METRICS:")
         print(f"  Max Drawdown           : {m['max_drawdown_pct']:.2f}%")
+        if self.minute_bars:
+            print(f"  Next-bar Close Exits   : {m['close_hits']}")
+            print("  Annualized ratios omitted for sampled minute returns.")
+            print("=" * 80)
+            return
         print(f"  Annualized Sharpe      : {m['sharpe_ratio']:.2f}")
         print(f"  Annualized Sortino     : {m['sortino_ratio']:.2f}")
         print(f"  Calmar Ratio           : {m['calmar_ratio']:.2f}")
@@ -1048,7 +1065,8 @@ class AdvancedProfitCalculator:
         axes[0].plot(x_axis, equity_curve, label=f"Strategy Equity (${m['final_equity']:,.0f} / {m['strategy_return_pct']:+.1f}%)", color="#1E88E5", linewidth=2.2)
         axes[0].plot(x_axis, benchmark_curve, label=f"Buy & Hold (${self.benchmark_curve[-1]:,.0f} / {m['benchmark_return_pct']:+.1f}%)", color="#78909C", linestyle="--", linewidth=1.5)
         axes[0].axhline(y=self.initial_capital, color="#B0BEC5", linestyle=":", linewidth=1.2, label=f"Initial Capital (${self.initial_capital:,.0f})")
-        axes[0].set_title(f"Cumulative Portfolio Value (Alpha: {m['alpha_pct']:+.1f}% | Profit Factor: {m['profit_factor']:.2f} | Sharpe: {m['sharpe_ratio']:.2f})", fontsize=12, fontweight="bold")
+        sharpe_label = "" if self.minute_bars else f" | Sharpe: {m['sharpe_ratio']:.2f}"
+        axes[0].set_title(f"Cumulative Portfolio Value (Alpha: {m['alpha_pct']:+.1f}% | Profit Factor: {m['profit_factor']:.2f}{sharpe_label})", fontsize=12, fontweight="bold")
         axes[0].set_ylabel("Portfolio Value ($)", fontsize=11)
         axes[0].legend(loc="upper left", framealpha=0.9)
         axes[0].grid(True, linestyle=":", alpha=0.6)
@@ -1455,34 +1473,6 @@ def optimize_strategy_ga(
         verbose=verbose,
     )
     return optimizer.optimize()
-
-
-class BigMoveAwareLoss(nn.Module):
-    """
-    Directional loss function that heavily penalizes sign mismatches (wrong direction)
-    and penalizes missing large tail-risk market moves (moves >= sigma_threshold).
-    """
-    def __init__(self, dir_penalty=0.5, mag_penalty=2.0, sigma_threshold=1.5):
-        super().__init__()
-        self.mse = nn.MSELoss(reduction="none")
-        self.dir_penalty = dir_penalty
-        self.mag_penalty = mag_penalty
-        self.sigma_threshold = sigma_threshold
-
-    def forward(self, y_pred, y_true):
-        sq_error = self.mse(y_pred, y_true)
-
-        weight = 1.0 + self.mag_penalty * torch.abs(y_true)
-        big_move_mask = (torch.abs(y_true) >= self.sigma_threshold).float()
-        weight = weight + (big_move_mask * self.mag_penalty * 2.0)
-
-        weighted_mse = sq_error * weight
-
-        sign_mismatch = torch.relu(-torch.sign(y_pred) * torch.sign(y_true))
-        dir_weight = torch.abs(y_true) + (big_move_mask * 2.0)
-        dir_loss = sign_mismatch * dir_weight * self.dir_penalty
-
-        return torch.mean(weighted_mse + dir_loss)
 
 
 def export_model(

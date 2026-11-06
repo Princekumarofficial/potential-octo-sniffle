@@ -1,25 +1,28 @@
-# BTP stock forecasting project
+# Stock forecasting pipeline
 
-This repository contains stock forecasting experiments and a pipeline that turns minute-level OHLCV data into validated feature datasets. The current feature build covers 97 stocks.
+This folder turns minute OHLCV data into validated Parquet features and PyTorch training windows.
 
-## Documentation
+| Location | Contents |
+| --- | --- |
+| [datasets/NIFTY50](datasets/NIFTY50/) | Raw per-stock OHLCV CSVs |
+| [eda](eda/) | Coverage notebook, market-minute calendar, and gap reports |
+| [helpers](helpers/) | Feature engineering, dataset classes, and training utilities |
+| [processed_datasets](processed_datasets/) | Per-stock Parquet files and validation reports |
 
-| Guide                                                                 | What it covers                                              |
-| --------------------------------------------------------------------- | ----------------------------------------------------------- |
-| [Data transformation flow](full_predictor/DATA_TRANSFORMATION_FLOW.md) | Raw CSVs to Parquet, including rebuild and validation steps |
-| [Feature reference](full_predictor/FEATURES.md)                        | Indicator formulas, NaN handling, and daily GARCH forecasts |
-| [Utility reference](full_predictor/UTILS.md)                           | Windowing, training, evaluation, and checkpoint helpers     |
-|                                                                       |                                                             |
-|                                                                       |                                                             |
+| Guide | Start here for |
+| --- | --- |
+| [Examples](EXAMPLES.md) | Run the HYUNDAI training, evaluation, and profit simulation |
+| [Transformation flow](docs/DATA_TRANSFORMATION_FLOW.md) | Inputs, rebuild command, and output checks |
+| [Feature reference](docs/FEATURES.md) | Indicator definitions, imputation, and warm-up |
+| [Data loaders](docs/DATA_LOADERS.md) | Feature selection, forecasting windows, and PyTorch batching |
+| [Utilities](docs/UTILS.md) | Training, evaluation, and checkpoints |
 
-## Folder structure
+## Train HYUNDAI
 
-| Location                                                                    | Contents                                            |
-| --------------------------------------------------------------------------- | --------------------------------------------------- |
-| [`full_predictor/`](full_predictor/)                                       | Feature pipeline, utilities, and validation tests   |
-| [`full_predictor/datasets/`](full_predictor/datasets/)                     | Raw stock CSVs                                      |
-| [`full_predictor/eda/`](full_predictor/eda/)                               | EDA notebook, minute calendar, and coverage reports |
-| [`full_predictor/processed_datasets/`](full_predictor/processed_datasets/) | Per-stock Parquet files and validation reports      |
-|                                                                             |                                                     |
+From inside this folder, run with NumPy, pandas, PyTorch, pyarrow, arch, scikit-learn, and matplotlib installed.
 
-The root notebooks cover model training and evaluation. For the feature build, start with the transformation guide. The calendar currently lives in `full_predictor/eda/eda_outputs/`, while the rebuild command expects it in `full_predictor/eda_outputs/`. Copy `expected_market_minutes.csv` to the expected location before rebuilding.
+```powershell
+python main.py --epochs 20
+```
+
+The entry point trains an LSTM on observed-bar windows, validates on later sessions, and evaluates the final held-out sessions. It saves the checkpoint, test predictions, trade log, and metrics in `runs/HYUNDAI/`. The profit simulation applies the calculator to eligible one-minute close-to-close returns with a fixed trading threshold and fee.
