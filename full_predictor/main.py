@@ -1,6 +1,8 @@
+from pathlib import Path
 from pprint import pprint
 
 import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Subset
 
@@ -15,7 +17,7 @@ from rl_model import Action, QLearningAgent, TradingEnvironment, forecast_batche
 
 
 if __name__ == "__main__":
-    STOCK = "HYUNDAI"
+    STOCK = "LTIM"
     FEATURES = (
         "returns", "log_returns", "rsi_14", "trend_slope_pct_20",
         "rolling_volatility_30", "relative_volume_20", "log_volume",
@@ -118,6 +120,7 @@ if __name__ == "__main__":
     )
     print("RL policy:")
     pprint(agent.run(test_env))
+    rl_trades = test_env.trades.copy()
     observation = test_env.reset()
     while observation is not None:
         forecast, long, _ = observation
@@ -127,3 +130,21 @@ if __name__ == "__main__":
     print("LSTM threshold baseline:")
     pprint(test_env.summary())
     print("Cash baseline: 0.00% return, no fees or exposure.")
+
+    report_dir = Path(__file__).resolve().parent / "reports"
+    report_dir.mkdir(exist_ok=True)
+    trade_columns = ["entry_time", "exit_time", "held_minutes", "exit_reason",
+                     "net_return_pct", "net_pnl_per_10000", "fees_per_10000"]
+    for name, trades in (("rl_policy", rl_trades), ("lstm_threshold", test_env.trades)):
+        path = report_dir / f"{STOCK}_{name}_trades.csv"
+        report = pd.DataFrame(trades, columns=trade_columns, dtype=object)
+        pnl = report["net_pnl_per_10000"].astype(float)
+        report["cumulative_net_pnl_per_10000"] = pnl.cumsum()
+        report["cumulative_fees_per_10000"] = report["fees_per_10000"].astype(float).cumsum()
+        report["equity_per_10000"] = 10_000 + report["cumulative_net_pnl_per_10000"]
+        report["cumulative_growth_factor"] = report["equity_per_10000"] / 10_000
+        report["cumulative_net_return_pct"] = report["cumulative_net_pnl_per_10000"] / 100
+        cumulative_losses = -pnl.clip(upper=0).cumsum()
+        report["cumulative_profit_factor"] = pnl.clip(lower=0).cumsum() / cumulative_losses.where(cumulative_losses > 0)
+        report.to_csv(path, index=False)
+        print(f"Saved {len(trades)} closed trades to {path}")

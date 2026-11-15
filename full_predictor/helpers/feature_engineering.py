@@ -14,6 +14,7 @@ EXCLUDED_STOCKS = {"IRFC", "HDFCLIFE", "SBILIFE"}
 RAW = ["open", "high", "low", "close", "volume"]
 MISSING_POLICY = "Fill 1-3 absent bars with the mean of equally many observed bars on each side."
 CALENDAR_PATH = Path("eda/eda_outputs/expected_market_minutes.csv")
+PROCESSED_PATH = Path("datasets/processed_datasets")
 
 
 def fill_short_gaps(frame):
@@ -125,68 +126,158 @@ def daily_garch(frame, min_obs=60, window=252):
     return pd.Series(forecast.reindex(frame.index.normalize()).to_numpy(), index=frame.index), fit_records
 
 
+def rolling(series, segment, period, method="mean"):
+    grouped = series.groupby(segment).rolling(period, min_periods=period)
+    return getattr(grouped, method)().reset_index(level=0, drop=True).reindex(series.index)
+
+
+def exponential_mean(series, segment, period, *, alpha=None):
+    decay = {"span": period} if alpha is None else {"alpha": alpha}
+    return (series.groupby(segment).ewm(adjust=False, min_periods=period, **decay).mean()
+            .reset_index(level=0, drop=True).reindex(series.index))
+
+
+def add_returns(features, close, segment):
+    ratio = close.div(close.groupby(segment).shift())
+    features["returns"] = ratio - 1
+    features["log_returns"] = np.log(ratio)
+
+
+def add_sma(features, close, segment, periods=(5, 10, 20, 50, 100, 200, 300)):
+    for period in periods:
+        features[f"sma_{period}"] = rolling(close, segment, period)
+
+
+def add_ema(features, close, segment, periods=(5, 10, 20, 50, 100)):
+    for period in periods:
+        features[f"ema_{period}"] = exponential_mean(close, segment, period)
+
+
+def add_rsi(features, close, segment, periods=(10, 14, 20, 30)):
+    delta = close.groupby(segment).diff()
+    for period in periods:
+        gain = exponential_mean(delta.clip(lower=0), segment, period, alpha=1/period)
+        loss = exponential_mean(-delta.clip(upper=0), segment, period, alpha=1/period)
+        rsi = 100 - 100 / (1 + gain.div(loss.replace(0, np.nan)))
+        features[f"rsi_{period}"] = rsi.mask((loss == 0) & (gain > 0), 100).mask(
+            (loss == 0) & (gain == 0), 50
+        )
+
+
+def add_bollinger(features, close, segment, periods=(20, 40, 60, 80), deviations=(1.5, 2.0, 2.5)):
+    for period in periods:
+        middle = rolling(close, segment, period)
+        std = rolling(close, segment, period, "std")
+        features[f"bb_middle_{period}"] = middle
+        for multiplier in deviations:
+            suffix = str(period) if multiplier == 2 else f"{period}_{multiplier:g}sd"
+            distance = multiplier * std
+            lower = middle - distance
+            width = 2 * distance
+            features[f"bb_upper_{suffix}"] = middle + distance
+            features[f"bb_lower_{suffix}"] = lower
+            features[f"bb_width_{suffix}"] = width.div(middle)
+            features[f"bb_position_{suffix}"] = (close - lower).div(width.replace(0, np.nan))
+
+
+def add_donchian(features, high, low, segment, periods=(20, 50, 100, 150)):
+    # Breakout thresholds use the preceding bars within the same segment.
+    prior_high = high.groupby(segment).shift()
+    prior_low = low.groupby(segment).shift()
+    for period in periods:
+        features[f"donchian_upper_{period}"] = rolling(prior_high, segment, period, "max")
+        features[f"donchian_lower_{period}"] = rolling(prior_low, segment, period, "min")
+
+
+def add_vwap(features, close, high, low, volume, segment, periods=(20, 40, 60, 120)):
+    typical = (high + low + close) / 3
+    cumulative_volume = volume.groupby(segment).cumsum().replace(0, np.nan)
+    features["vwap_segment"] = (typical * volume).groupby(segment).cumsum().div(cumulative_volume)
+
+    close_volume = close * volume
+    for period in periods:
+        window_volume = rolling(volume, segment, period, "sum").replace(0, np.nan)
+        features[f"vwap_{period}"] = rolling(close_volume, segment, period, "sum").div(window_volume)
+
+
+def add_trend(features, close, segment, fast=20, slow=50, slope_period=20):
+    fast_mean = features[f"sma_{fast}"]
+    slow_mean = features[f"sma_{slow}"]
+    features["trend"] = np.sign(fast_mean - slow_mean)
+    features["trend_strength"] = fast_mean.div(slow_mean) - 1
+
+    age = close.groupby(segment).cumcount().astype(float)
+    n = slope_period
+    centered_sum = rolling(close * age, segment, n, "sum") - (
+        age - (n - 1) / 2
+    ) * rolling(close, segment, n, "sum")
+    slope = centered_sum / (n * (n * n - 1) / 12)
+    features[f"trend_slope_{n}"] = slope
+    features[f"trend_slope_pct_{n}"] = slope.div(features[f"sma_{n}"]) * 100
+
+
+def add_macd(features, close, segment, fast=12, slow=26, signal_period=9):
+    macd = exponential_mean(close, segment, fast) - exponential_mean(close, segment, slow)
+    signal = exponential_mean(macd, segment, signal_period)
+    features["macd"] = macd
+    features["macd_signal"] = signal
+    features["macd_histogram"] = macd - signal
+
+
+def add_rolling_volatility(features, log_returns, segment, periods=(30,)):
+    for period in periods:
+        features[f"rolling_volatility_{period}"] = rolling(log_returns, segment, period, "std")
+
+
+def add_volume_features(features, close, volume, segment, periods=(20,)):
+    for period in periods:
+        mean = rolling(volume, segment, period)
+        std = rolling(volume, segment, period, "std")
+        features[f"volume_sma_{period}"] = mean
+        features[f"relative_volume_{period}"] = volume.div(mean.replace(0, np.nan))
+        features[f"volume_zscore_{period}"] = (volume - mean).div(std.replace(0, np.nan))
+    features["volume_change"] = volume.div(volume.groupby(segment).shift().replace(0, np.nan)) - 1
+    features["log_volume"] = np.log1p(volume)
+    features["dollar_volume"] = close * volume
+
+
+def add_obv(features, close, volume, segment):
+    direction = np.sign(close.groupby(segment).diff()).fillna(0)
+    features["obv_segment"] = (direction * volume).groupby(segment).cumsum()
+
+
 def add_features(frame, include_garch=True):
     out = frame.copy()
     valid = out.is_valid_bar
-    t = out.index.to_series()
-    boundary = (~valid | ~valid.shift(fill_value=False) | t.diff().ne(pd.Timedelta(minutes=1))
-                | t.dt.normalize().ne(t.shift().dt.normalize()))
+    timestamps = out.index.to_series()
+    boundary = (
+        ~valid | ~valid.shift(fill_value=False)
+        | timestamps.diff().ne(pd.Timedelta(minutes=1))
+        | timestamps.dt.normalize().ne(timestamps.shift().dt.normalize())
+    )
     segment = boundary.cumsum()
     out["segment_id"] = segment.to_numpy()
-    close = out.close.where(valid)
-    volume = out.volume.where(valid)
+    close, high, low, volume = (out[column].where(valid) for column in ("close", "high", "low", "volume"))
 
-    def roll(s, n, method="mean"):
-        result = getattr(s.groupby(segment).rolling(n, min_periods=n), method)()
-        return result.reset_index(level=0, drop=True).reindex(out.index)
+    features = {}
+    add_returns(features, close, segment)
+    add_sma(features, close, segment)
+    add_ema(features, close, segment)
+    add_rsi(features, close, segment)
+    add_bollinger(features, close, segment)
+    add_donchian(features, high, low, segment)
+    add_vwap(features, close, high, low, volume, segment)
+    add_trend(features, close, segment)
+    add_macd(features, close, segment)
+    add_rolling_volatility(features, features["log_returns"], segment)
+    add_volume_features(features, close, volume, segment)
+    add_obv(features, close, volume, segment)
 
-    def ema(s, span, alpha=None):
-        kw = {"alpha": alpha} if alpha is not None else {"span": span}
-        return (s.groupby(segment).ewm(adjust=False, min_periods=span, **kw).mean()
-                .reset_index(level=0, drop=True).reindex(out.index))
-
-    previous = close.groupby(segment).shift()
-    out["returns"] = close.div(previous) - 1
-    out["log_returns"] = np.log(close.div(previous))
-    for n in (5, 10, 20, 50, 100):
-        out[f"sma_{n}"] = roll(close, n)
-        out[f"ema_{n}"] = ema(close, n)
-    delta = close - previous
-    gain, loss = ema(delta.clip(lower=0), 14, 1/14), ema(-delta.clip(upper=0), 14, 1/14)
-    out["rsi_14"] = (100 - 100/(1 + gain.div(loss.replace(0, np.nan)))).mask((loss == 0) & (gain > 0), 100).mask((loss == 0) & (gain == 0), 50)
-    mid, sd = out.sma_20, roll(close, 20, "std")
-    out["bb_middle_20"] = mid
-    out["bb_upper_20"] = mid + 2*sd
-    out["bb_lower_20"] = mid - 2*sd
-    out["bb_width_20"] = (4*sd).div(mid)
-    out["bb_position_20"] = (close-out.bb_lower_20).div((4*sd).replace(0,np.nan))
-    out["trend"] = np.sign(out.sma_20 - out.sma_50)
-    out["trend_strength"] = out.sma_20.div(out.sma_50) - 1
-    age = close.groupby(segment).cumcount().astype(float)
-    n = 20
-    # Least-squares slope on the trailing 20 closes; no centered/future window.
-    out["trend_slope_20"] = (roll(close*age,n,"sum") - (age-(n-1)/2)*roll(close,n,"sum")) / (n*(n*n-1)/12)
-    out["trend_slope_pct_20"] = out.trend_slope_20.div(out.sma_20) * 100
-    out["macd"] = ema(close,12) - ema(close,26)
-    out["macd_signal"] = ema(out.macd,9)
-    out["macd_histogram"] = out.macd - out.macd_signal
-    out["rolling_volatility_30"] = roll(out.log_returns,30,"std")
-    out["volume_sma_20"] = roll(volume,20)
-    out["relative_volume_20"] = volume.div(out.volume_sma_20.replace(0,np.nan))
-    out["volume_zscore_20"] = (volume-out.volume_sma_20).div(roll(volume,20,"std").replace(0,np.nan))
-    out["volume_change"] = volume.div(volume.groupby(segment).shift().replace(0,np.nan))-1
-    out["log_volume"] = np.log1p(volume)
-    out["dollar_volume"] = close * volume
-    out["obv_segment"] = (np.sign(delta).fillna(0)*volume).groupby(segment).cumsum().where(valid)
-    typical = (out.high+out.low+out.close).where(valid)/3
-    out["vwap_segment"] = (typical*volume).groupby(segment).cumsum().div(volume.groupby(segment).cumsum().replace(0,np.nan))
     records = []
     if include_garch:
-        out["garch_daily_volatility"] , records = daily_garch(out)
-    feature_cols = [c for c in out if c not in RAW + ["is_missing_bar","is_imputed_bar","is_valid_bar","segment_id"]]
-    # Entire feature rows remain NaN for absent or invalid observations.
-    out.loc[~valid,feature_cols] = np.nan
-    return out, feature_cols, records
+        features["garch_daily_volatility"], records = daily_garch(out)
+    feature_frame = pd.DataFrame(features, index=out.index).where(valid, axis=0)
+    return pd.concat([out, feature_frame], axis=1), list(features), records
 
 
 def validate_features(frame, features):
@@ -261,14 +352,14 @@ def write_feature_manifest(base_dir, summary):
                    units="decimal daily return standard deviation"),
         versions={name:importlib.metadata.version(name) for name in ["numpy","pandas","arch","pyarrow"]},
         source_files=[dict(path=str(p.resolve()),bytes=p.stat().st_size,mtime_ns=p.stat().st_mtime_ns) for p in sources])
-    (base_dir/"processed_datasets/feature_manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
+    (base_dir / PROCESSED_PATH / "feature_manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
 
 
 def transform_all(base_dir, stocks=None, workers=1):
     """Transform eligible stocks; workers>1 is intended for a guarded CLI script."""
     from concurrent.futures import ProcessPoolExecutor
     base_dir = Path(base_dir)
-    output = base_dir/"processed_datasets/NIFTY50"
+    output = base_dir / PROCESSED_PATH / "NIFTY50"
     output.mkdir(parents=True,exist_ok=True)
     paths = [p for p in sorted((base_dir/"datasets/NIFTY50").glob("*.csv"))
              if p.stem not in EXCLUDED_STOCKS and (stocks is None or p.stem in stocks)]
@@ -297,5 +388,15 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workers",type=int,default=1)
+    parser.add_argument("--csv", type=Path, help="Process one OHLCV CSV file.")
     args = parser.parse_args()
-    transform_all(Path(__file__).resolve().parents[1],workers=args.workers)
+    base_dir = Path(__file__).resolve().parents[1]
+    if args.csv is None:
+        transform_all(base_dir, workers=args.workers)
+    else:
+        if not args.csv.is_file() or args.csv.suffix.lower() != ".csv":
+            parser.error(f"Expected an existing CSV file: {args.csv}")
+        output = base_dir / PROCESSED_PATH / "NIFTY50"
+        output.mkdir(parents=True, exist_ok=True)
+        summary, _, _ = _transform_one((args.csv, base_dir / CALENDAR_PATH, output))
+        print(f"Wrote {output / (args.csv.stem + '.parquet')} with {summary['feature_count']} features.")

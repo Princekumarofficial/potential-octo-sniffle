@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import ConcatDataset, Dataset
 
 
-PROCESSED_DATA_DIR = Path(__file__).resolve().parents[1] / "processed_datasets" / "NIFTY50"
+PROCESSED_DATA_DIR = Path(__file__).resolve().parents[1] / "datasets/processed_datasets" / "NIFTY50"
 
 
 def list_processed_stocks() -> list[str]:

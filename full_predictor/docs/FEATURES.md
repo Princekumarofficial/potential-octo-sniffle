@@ -1,6 +1,6 @@
 # Feature reference
 
-The transformation writes one Parquet file per stock to `processed_datasets/NIFTY50/`.
+The transformation writes one Parquet file per stock to `datasets/processed_datasets/NIFTY50/`.
 For inputs, rebuild instructions, and validation reports, see [Transformation flow](DATA_TRANSFORMATION_FLOW.md).
 
 ## Missing bars and feature timing

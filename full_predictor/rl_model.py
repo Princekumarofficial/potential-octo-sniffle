@@ -3,8 +3,9 @@
 from bisect import bisect_right
 from datetime import timedelta
 from enum import IntEnum
-from math import isfinite
+from math import isfinite, sqrt
 from random import Random
+from statistics import mean, stdev
 
 
 class Action(IntEnum):
@@ -39,6 +40,8 @@ class TradingEnvironment:
         self.equity = [1.0]
         self.entries = self.exits = self.exposed_bars = 0
         self.fees = 0.0
+        self.trades = []
+        self._entry = None
         return self.observation()
 
     def observation(self):
@@ -65,6 +68,11 @@ class TradingEnvironment:
             self.long = action == Action.BUY
             self.entries += int(self.long)
             self.exits += int(not self.long)
+            decision_time = self.timestamps[self.index] - timedelta(minutes=1)
+            if self.long:
+                self._entry = (decision_time, previous, self.exposed_bars, fee)
+            else:
+                self._close_trade(decision_time, value, fee, "sell")
         if self.long:
             self.exposed_bars += 1
             value *= 1 + self.returns[self.index]
@@ -74,11 +82,25 @@ class TradingEnvironment:
                 value -= fee
                 self.long = False
                 self.exits += 1
+                self._close_trade(self.timestamps[self.index], value, fee, "segment_end")
         terminal = self.ends[self.index]
         self.equity.append(value)
         self.index += 1
         next_observation = self.observation() if self.index < len(self.returns) else None
         return next_observation, value / previous - 1, terminal
+
+    def _close_trade(self, timestamp, value, exit_fee, reason):
+        entry_time, entry_equity, entry_bar, entry_fee = self._entry
+        self.trades.append({
+            "entry_time": entry_time,
+            "exit_time": timestamp,
+            "held_minutes": self.exposed_bars - entry_bar,
+            "exit_reason": reason,
+            "net_return_pct": 100 * (value / entry_equity - 1),
+            "net_pnl_per_10000": 10_000 * (value - entry_equity),
+            "fees_per_10000": 10_000 * (entry_fee + exit_fee),
+        })
+        self._entry = None
 
     def summary(self):
         peak = 1.0
@@ -86,6 +108,18 @@ class TradingEnvironment:
         for value in self.equity:
             peak = max(peak, value)
             drawdown = min(drawdown, value / peak - 1)
+        pnls = [trade["net_pnl_per_10000"] for trade in self.trades]
+        wins = [pnl for pnl in pnls if pnl > 0]
+        losses = [pnl for pnl in pnls if pnl < 0]
+        session_returns = []
+        session_start = self.equity[0]
+        for i in range(self.index):
+            if i + 1 == self.index or self.timestamps[i].date() != self.timestamps[i + 1].date():
+                session_close = self.equity[i + 1]
+                session_returns.append(session_close / session_start - 1)
+                session_start = session_close
+        elapsed_days = (self.timestamps[self.index - 1] - self.timestamps[0] + timedelta(minutes=1)).total_seconds() / 86400 if self.index else 0
+        session_std = stdev(session_returns) if len(session_returns) > 1 else 0
         return {
             "net_return_pct": 100 * (self.equity[-1] - 1),
             "fees_per_10000_initial_capital": 10_000 * self.fees,
@@ -93,6 +127,25 @@ class TradingEnvironment:
             "exits": self.exits,
             "exposure_pct": 100 * self.exposed_bars / len(self.returns),
             "max_drawdown_pct": 100 * drawdown,
+            "closed_trades": len(pnls),
+            "winning_trades": len(wins),
+            "losing_trades": len(losses),
+            "breakeven_trades": len(pnls) - len(wins) - len(losses),
+            "win_rate_pct": 100 * len(wins) / len(pnls) if pnls else None,
+            "gross_profit_per_10000": sum(wins),
+            "gross_loss_per_10000": -sum(losses),
+            "net_pnl_per_10000": 10_000 * (self.equity[-1] - 1),
+            "avg_trade_pnl_per_10000": mean(pnls) if pnls else None,
+            "avg_win_per_10000": mean(wins) if wins else None,
+            "avg_loss_per_10000": mean(losses) if losses else None,
+            "best_trade_per_10000": max(pnls) if pnls else None,
+            "worst_trade_per_10000": min(pnls) if pnls else None,
+            "profit_factor": sum(wins) / -sum(losses) if losses else None,
+            "avg_hold_minutes": mean(t["held_minutes"] for t in self.trades) if pnls else None,
+            "test_sessions": len(session_returns),
+            "elapsed_calendar_days": elapsed_days,
+            "annualized_cagr_pct": 100 * (self.equity[-1] ** (365.25 / elapsed_days) - 1) if elapsed_days >= 1 else None,
+            "annualized_sharpe_zero_rf": sqrt(252) * mean(session_returns) / session_std if session_std > 0 else None,
         }
 
 
