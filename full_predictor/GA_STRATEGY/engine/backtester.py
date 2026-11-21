@@ -75,6 +75,7 @@ class StrategyProfitCalculator:
             "worst_day": worst_day.date().isoformat(),
             "worst_day_return": float(daily.loc[worst_day]),
         }
+        report.update(self.net.attrs.get("execution", {}))
         if include_curves:
             report["daily_curves"] = pd.DataFrame({
                 "strategy": (1 + daily).cumprod() - 1,

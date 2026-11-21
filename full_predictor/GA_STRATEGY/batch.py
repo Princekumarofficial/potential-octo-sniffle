@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .engine.execution import execution_returns, STARTING_CAPITAL
 from .engine.objectives import DEFAULT_OBJECTIVE, OBJECTIVES, training_score
 from .main import DEFAULT_DATA_PATH, load_data
 from .engine.ga_optimizer import genetic_optimize, load_config
@@ -17,8 +18,7 @@ from .engine.backtester import DEFAULT_COST, finalize_strategy, StrategyProfitCa
 from .strategies import core_strategies
 
 
-def metrics(close, signal):
-    returns = finalize_strategy(close.pct_change(), signal, DEFAULT_COST)
+def metrics(close, signal, returns):
     report = StrategyProfitCalculator(close, signal, returns).summary()
     elapsed = (close.index[-1] - close.index[0]).total_seconds() / (365.25 * 86400)
     growth = 1 + report["cumulative_return"]
@@ -49,6 +49,8 @@ def evaluate_stock(stock, frame, months, train_months, valid_months, gp_options,
     names = [*config, "GP", "Selected"]
     histories = {name: [] for name in names}
     monthly = []
+    net_history = {name: [] for name in names}
+    capitals = dict.fromkeys(names, STARTING_CAPITAL)
     for number, month in enumerate(months):
         start, end = month.start_time, (month + 1).start_time
         fit_start = (month - train_months).start_time
@@ -87,7 +89,10 @@ def evaluate_stock(stock, frame, months, train_months, valid_months, gp_options,
                 prior_close, prior_signal = previous[-1]
                 context_close = pd.concat([prior_close.iloc[-1:], context_close])
                 context_signal = pd.concat([prior_signal.iloc[-1:], context_signal])
-            returns = finalize_strategy(context_close.pct_change(), context_signal, DEFAULT_COST).loc[test.index]
+            returns = execution_returns(test["Close"], signal, capital=capitals[name])
+            execution = returns.attrs["execution"]
+            capitals[name] = execution["final_equity"]
+            net_history[name].append(returns)
             daily = to_daily_returns(returns)
             incoming = context_signal.shift(fill_value=0).loc[test.index]
             turnover = context_signal.diff().fillna(context_signal).abs().loc[test.index]
@@ -97,12 +102,13 @@ def evaluate_stock(stock, frame, months, train_months, valid_months, gp_options,
                 "net_return": float(equity.iloc[-1] - 1),
                 "max_drawdown": max_drawdown(returns),
                 "sharpe": sharpe(daily), "sortino": sortino(daily),
-                "cost_drag": float((opening * turnover * DEFAULT_COST).sum()),
+                "cost_drag": execution["cost_drag"],
                 "long_exposure": float(incoming.gt(0).mean()),
                 "short_exposure": float(incoming.lt(0).mean()),
                 "position_changes": int(turnover.gt(0).sum()),
                 "benchmark_return": float((1 + context_close.pct_change().fillna(0).loc[test.index]).prod() - 1),
             }
+            period_report.update(execution)
             selection_name = winner if name == "Selected" else name
             params = candidates.get(selection_name, (None, None, None))[1]
             monthly.append(dict(stock=stock, month=str(month), objective=objective,
@@ -119,8 +125,20 @@ def evaluate_stock(stock, frame, months, train_months, valid_months, gp_options,
     for name, periods in histories.items():
         close = pd.concat([pair[0] for pair in periods])
         signal = pd.concat([pair[1] for pair in periods])
-        summaries.append(dict(stock=stock, strategy=name, objective=objective, **metrics(close, signal)))
-        returns = finalize_strategy(close.pct_change(), signal, DEFAULT_COST)
+        returns = pd.concat(net_history[name])
+        execution = dict(net_history[name][-1].attrs["execution"])
+        for key in ["fees", "fills", *[k for k in execution if k.startswith("charge_")]]:
+            execution[key] = sum(part.attrs["execution"][key] for part in net_history[name])
+        execution["initial_capital"] = STARTING_CAPITAL
+        execution["cost_drag"] = execution["fees"] / STARTING_CAPITAL
+        for key in ("long_exposure", "short_exposure"):
+            execution[key] = sum(len(part) * part.attrs["execution"][key] for part in net_history[name]) / len(returns)
+        execution["position_changes"] = execution["fills"]
+        for key in ("long_pnl", "short_pnl"):
+            execution[key] = sum(part.attrs["execution"][key] * part.attrs["execution"]["initial_capital"] for part in net_history[name]) / STARTING_CAPITAL
+        execution["directional_hit_rate"] = None
+        returns.attrs["execution"] = execution
+        summaries.append(dict(stock=stock, strategy=name, objective=objective, **metrics(close, signal, returns)))
         curves[name] = (1 + to_daily_returns(returns)).cumprod() - 1
     if plot_dir is not None:
         curves["Buy and hold"] = (1 + to_daily_returns(close.pct_change().fillna(0))).cumprod() - 1

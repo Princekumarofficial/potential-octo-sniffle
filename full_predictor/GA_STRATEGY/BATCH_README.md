@@ -1,44 +1,128 @@
-# Monthly evaluation across stocks
+# Batch Walk-Forward Optimization Runner
 
-The objective defaults to `blend`, the original Sharpe/Sortino/drawdown score. Set `--objective calmar` to use CAGR divided by absolute maximum drawdown for grid optimization, GP fitness, and monthly winner selection. CAGR uses actual elapsed calendar time. Undefined Calmar candidates, including zero-drawdown candidates, are skipped. GP retains its 0.01-per-node complexity penalty during evolution. The shared default is `DEFAULT_OBJECTIVE` in `engine/objectives.py`. CSVs record the objective.
+The `batch.py` runner executes **rolling walk-forward strategy optimization** across multiple Nifty 50 stocks concurrently, evaluating parameter grids and genetic programming rules on out-of-sample monthly test periods.
 
-Use `--years 5` to evaluate the latest 60 calendar months, `--year 2022` for January through December 2022, or `--start-month 2020-01 --end-month 2024-12` for an explicit range. Earlier bars remain available for the six-month training window. The latest month may be partial. For a dataset ending August 2025, `--years 5` covers September 2020 through August 2025. Add `--end-month 2025-07` to anchor the 60-month window to July instead.
+---
 
-```powershell
-python -m GA_STRATEGY.batch --workers 4 --years 5 --objective calmar --output reports/calmar_5years
-python -m GA_STRATEGY.batch --workers 4 --year 2022 --output reports/blend_2022
-```
+## 1. Quick Start
 
-From `full_predictor`, run:
+Run from the `full_predictor` directory:
 
 ```powershell
-python -m GA_STRATEGY.batch --output reports/batch_validation
+# Full 5-year run across all stocks with 8 CPU worker processes
+python -m GA_STRATEGY.batch --workers 8 --years 5 --objective composite --output reports/composite_long_5years
+
+# Test a single calendar year (e.g. 2022) on selected stocks
+python -m GA_STRATEGY.batch --workers 4 --year 2022 --stocks RELIANCE HINDALCO ADANIENT --output reports/test_2022
 ```
 
-The default validates the first five alphabetically sorted Parquet stocks. Specify names with `--stocks RELIANCE ABB ADANIENT ADANIPORTS ADANIGREEN`. Use `--limit 0` to process all available stocks. Processing defaults to one worker. Add `--workers 4` to process up to four stocks concurrently. Each worker loads one stock into memory. Monthly refits within a stock remain chronological, and the parent process writes the combined CSVs.
+---
 
-Each evaluation month uses the preceding six calendar months for fitting. The four grid strategies and the GP winner compete using the same training Sharpe/Sortino/drawdown score. GP uses its existing complexity penalty to evolve a rule, then that winner is compared using the common score. All five candidates are evaluated, and the Selected series follows the candidate chosen from training data. A failed candidate holds cash. If every training score is undefined, Selected holds cash.
+## 2. Walk-Forward Methodology
 
-By default, every stock uses its entire available history. The first six calendar months supply training data, the seventh month is evaluated, and the window moves forward one month at a time. Each refit uses the immediately preceding six months. All evaluation months are labeled test. For a stock starting in February 2015, the first fit covers February through July and the first test is August 2015. The next fit covers March through August and the next test is September.
+1. **Expanding / Rolling Fit Windows:**
+   * Every month, the engine uses the immediately preceding **6 calendar months** (`train-months = 6`) to fit strategies.
+   * The candidate with the highest training score is selected and frozen for evaluation during the subsequent **1 calendar month** test window.
+   * The window rolls forward one month at a time across the entire multi-year evaluation horizon.
 
-Each stock has its own start and end dates. First and last calendar months can be partial. Actual dates are recorded, and comparisons across stocks should account for different coverage. Use `--end-month 2025-07` to cap the endpoint. Use `--test-months 12` to restrict evaluation to the latest 12 months, or also set `--valid-months` to label an initial validation portion of that recent window. Earlier test months become eligible for later fits once those months have ended.
+2. **Competing Strategies:**
+   * **VWAP Mean Reversion** (48 parameter combinations)
+   * **RSI Mean Reversion** (36 parameter combinations)
+   * **Bollinger Bands Reversion** (12 parameter combinations)
+   * **Donchian Channel Breakout** (4 parameter combinations)
+   * **Genetic Programming (GP)** evolved Boolean rule trees
+   * All candidates compete under the same unpenalized training objective score to select the month's **`Selected`** winner.
 
-To run the full history of all stocks:
+3. **Continuous Compounding:**
+   * Positions and cash balances compound continuously across month boundaries.
+   * Switching strategies at month boundaries correctly charges turnover fees based on the prior position and new target.
 
-```powershell
-python -m GA_STRATEGY.batch --limit 0 --train-months 6 --output reports/batch_full_history
-```
+---
+
+## 3. Training Objectives (`engine/objectives.py`)
+
+Set via `--objective [composite | calmar | blend]`:
+
+* **`composite` (Default):**
+  $$\text{score} = 0.5 \cdot \text{Sharpe} + 0.8 \cdot \text{Sortino} + 2.0 \cdot \text{DD} - 5.0 \cdot \text{DD}^2 + 0.4 \cdot \min(\text{Calmar}, 2.0)$$
+  Progressively penalizes deep drawdowns with a quadratic penalty while capping outsized Calmar outliers.
+* **`calmar`:** $\text{CAGR} / |\text{Max Drawdown}|$
+* **`blend`:** $0.7 \cdot \text{Sharpe} + 1.3 \cdot \text{Sortino} + 0.5 \cdot \text{Max Drawdown}$
+
+---
+
+## 4. Intraday Risk Management (`engine/risk.py`)
+
+All evaluations (both training and test) run with trade-level risk controls:
+* **Stop Loss:** `0.75%` (`DEFAULT_STOP_LOSS = 0.0075`) — immediately cuts adverse moves to Cash (`0.0`).
+* **Take Profit:** `1.50%` (`DEFAULT_TAKE_PROFIT = 0.0150`) — locks in quick reversion gains.
+* **Long-Only Mode (Default):** Short triggers (`-1.0`) are converted into cash exit signals. To allow shorting, pass `--allow-short`.
+
+---
+
+## 5. CLI Arguments
+
+| Argument | Default | Description |
+|---|---|---|
+| `--workers` | `1` | Number of concurrent stock worker processes. Recommended: 6 to 8 on modern 8-core CPUs. |
+| `--years` | `None` | Evaluate the latest $N \times 12$ calendar months (e.g. `--years 5` = 60 months). |
+| `--year` | `None` | Evaluate a single calendar year (e.g. `--year 2023`). |
+| `--start-month` | `None` | First evaluation month (e.g. `2020-01`). |
+| `--end-month` | `None` | Last evaluation month (e.g. `2025-07`). |
+| `--objective` | `composite` | Fitness objective: `composite`, `calmar`, or `blend`. |
+| `--long-only` | `True` | Only execute Long positions (no shorting). |
+| `--allow-short` | — | Flag to allow both Long and Short positions. |
+| `--limit` | `5` | Maximum number of stocks to process (`0` processes all available Parquets). |
+| `--stocks` | `None` | Explicit list of stock symbols (e.g. `--stocks RELIANCE TCS INFOSYS`). |
+| `--output` | `reports/batch` | Output folder for results, summaries, and plots. |
+| `--gp-population` | `40` | Population size for GP rule tree evolution. |
+| `--gp-generations`| `12` | Number of generations for GP evolution. |
+
+---
+
+## 6. Generated Output Files
+
+* **`monthly_results.csv`:** Full record of every evaluated stock-month, strategy parameters, training scores, out-of-sample returns, drawdowns, and transaction costs.
+* **`stock_summary.csv`:** Aggregated multi-year CAGR, Calmar ratio, cumulative return, and max drawdown per stock across all strategy families.
+* **`stock_rankings.csv`:** Performance ranking of the walk-forward **Monthly Selected Strategy** for each stock.
+* **`plots/STOCK.png`:** Multi-panel visualization comparing cumulative return curves of each strategy family, Selected, and Buy & Hold.
+* **`plots/STOCK_daily_returns.csv`:** Daily compounded return series used to produce the plots.
+* **`errors.csv`:** Log of any stocks that encountered errors or insufficient data history.
 
 
-Equity compounds continuously across evaluation months. The prior close and position carry into the next month, including the intervening price move. Switching from long to short incurs two units of turnover. The new target decided at the first close earns subsequent returns. Each new rule calculates its signal from that month's start. At the end of the final period, positions remain marked to market with no forced closing fee.
+### FYERS charges in training and batch evaluation
 
-The output directory contains:
+See the [execution engine guide](engine/README.md) for the full fee and
+accounting model, monthly compounding, report fields, and execution assumptions.
 
-- `monthly_results.csv` with each stock, month, candidate, parameters or GP tree, training score, selection flag, actual dates, return, drawdown, costs, exposure, Sharpe, and Sortino. Selected is an additional row tracking the chosen candidate.
-- `stock_summary.csv` with compounded results for each stock and strategy, including Selected. CAGR uses actual elapsed calendar time with 365.25 days per year. Calmar is CAGR divided by absolute drawdown. The realized_best column marks the highest realized cumulative return within a stock and is descriptive.
-- `stock_rankings.csv` with one Selected result per stock, ranked by CAGR. This represents the approach that made its choices before each evaluation month.
-- The ranking label is `Monthly selected strategy`. Its `selection_by_month` column lists the actual winning strategy for each month.
-- `plots/STOCK.png` plots all four fixed strategy families, GP, the monthly-selected approach, and buy and hold. The test boundary is marked. Equity compounds across validation and test. Each fixed strategy family also refits its parameters monthly. Corresponding `STOCK_daily_returns.csv` files contain the plotted cumulative-return series.
-- `errors.csv` listing stocks that could not complete. Their partial results are discarded.
+GA grid candidates and GP rules now optimize returns after the shared
+`engine/fees.py` FYERS charges, including brokerage, STT, exchange charges,
+SEBI, IPFT, stamp duty and GST. This supersedes the earlier fixed 0.0005
+cost description. Income tax is not deducted. Current tariff estimates are
+applied throughout historical data; this is not a historical tariff schedule.
 
-Returns and exposures are decimal fractions in the CSVs. For example, 0.05 represents 5%. CAGR annualizes the observed growth and can be extreme for short periods. Cross-stock comparisons should inspect the actual dates and coverage. GP settings are available through `--gp-population`, `--gp-generations`, and `--seed`.
+Set `STARTING_CAPITAL` (default 1,000,000 rupees) and `ALLOCATION` (default
+0.12) in `engine/execution.py`. Each strategy has its own unleveraged scoring
+account. Whole shares are sized from current equity at entry and held until
+exit; fees use actual order turnover and the shared per-order rounding.
+A reversal incurs separate closing and opening orders. Training/validation/
+test evaluations each start a fresh account. In batch, each strategy and
+Selected carry their account equity from one evaluation month into the next.
+Monthly and full-history reports expose fees, fills, charge components,
+initial/final equity, allocation and fee-model metadata. Charts and rankings
+use those same after-charge returns.
+
+Execution assumption: signals fill at the observed close; new positions are
+allowed before 15:00 and positions exit at 15:15 or the last observed bar of
+the day if earlier. The latter assumes a successful early close even with
+missing bars. Each evaluation slice liquidates its last position. These are
+idealized intraday fills, without slippage, circuit restrictions, leverage,
+forced broker square-off fees or delivery conversion. The portfolio engine
+continues to handle its own next-open fills and funding/blocked-exit rules.
+Sharing charges does not make these execution models identical. Risk signals
+are still generated by the existing strategy risk logic.
+
+Existing CSVs are unchanged. Rerun GA/GP and batch into a new output folder,
+then use the new monthly_results.csv for portfolio selection. Previous
+reports used different fee, sizing and holding assumptions, so they are not
+directly comparable to the new reports.

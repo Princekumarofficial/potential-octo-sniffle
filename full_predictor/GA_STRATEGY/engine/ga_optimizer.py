@@ -13,6 +13,7 @@ from .backtester import (
     to_daily_returns,
 )
 from ..strategies import core_strategies
+from .execution import execution_returns
 from .objectives import DEFAULT_OBJECTIVE, training_score
 
 
@@ -25,7 +26,8 @@ def load_config(path=CONFIG_PATH):
 
 
 def evaluate(df, fn, params, cost, *, report=False, include_curves=False):
-    returns, signal = fn(df, params, cost, finalize_strategy)
+    _, signal = fn(df, params, 0.0, finalize_strategy)
+    returns = execution_returns(df["Close"], signal)
     if report:
         metrics = StrategyProfitCalculator(df["Close"], signal, returns).summary(include_curves=include_curves)
         metrics["calmar"] = calmar_ratio(returns, metrics["dd"])

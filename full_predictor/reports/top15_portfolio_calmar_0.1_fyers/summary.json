@@ -1,0 +1,27 @@
+{
+  "initial_capital": 1000000.0,
+  "final_equity": 2199316.1999999858,
+  "cumulative_return": 1.199316199999986,
+  "daily_max_drawdown": -0.23448859008087708,
+  "fees": 2647779.64,
+  "fills": 48226,
+  "overnight_stock_days": 13,
+  "allocation": 0.1,
+  "ranking_months": 3,
+  "top": 15,
+  "start": "2020-12-01 00:00:00",
+  "end": "2025-08-06 00:00:00",
+  "fee_model": "FYERS Standard NSE intraday, current tariff checked 2026-11-16",
+  "rounding": "Per-component per-order paise estimates",
+  "charge_breakdown": {
+    "brokerage": 964437.85,
+    "stt": 1064793.82,
+    "exchange": 260412.58000000002,
+    "sebi": 8483.5,
+    "ipft": 0.0,
+    "stamp": 127458.58,
+    "gst": 222030.81000000003,
+    "admin": 0.0,
+    "dp": 162.5
+  }
+}

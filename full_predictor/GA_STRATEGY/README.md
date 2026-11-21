@@ -1,126 +1,234 @@
-# GA_STRATEGY
+# GA_STRATEGY: Walk-Forward Algorithmic Trading & Portfolio Engine
 
-Use the [batch runner](BATCH_README.md) to evaluate grid and GP strategies across multiple stocks and export monthly results, stock summaries, and rankings.
+A quantitative trading and portfolio backtesting framework designed for high-frequency Indian equity data (1-minute OHLCV). The engine performs **monthly walk-forward strategy optimization** (Grid Search and Genetic Programming), applies **intraday trade-level risk controls** (SL/TP and Long-Only enforcement), and simulates a **cash-constrained multi-stock portfolio** with realistic **NSE circuit-breaker filters**.
 
-See the [beginner’s guide to genetic programming](GP_README.md) for the optional GP mode.
+---
 
-## Monthly walk-forward mode
+## Architecture Overview
 
-From `full_predictor`, run:
-
-```powershell
-python -m GA_STRATEGY.main --walk-forward 3 --train-months 6
-python -m GA_STRATEGY.main --mode gp --walk-forward 3 --train-months 6
+```
+                      1-Minute Parquet Data (NIFTY 50)
+                                     │
+                                     ▼
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │ 1. BATCH WALK-FORWARD OPTIMIZER (batch.py)                             │
+ │    • Rolling 6-month train / 1-month test walk-forward                 │
+ │    • 4 Parametric Strategies (RSI, Bollinger, Donchian, VWAP)          │
+ │    • Genetic Programming (GP) Boolean rule tree evolution              │
+ │    • Multi-Objective Optimization: composite / calmar / blend          │
+ │    • Centralized Risk Management: 0.75% SL, 1.50% TP, Long-Only        │
+ │    • Parallel processing across CPU cores (--workers N)                │
+ └───────────────────────────────────┬────────────────────────────────────┘
+                                     │
+                                     ▼ Outputs: monthly_results.csv
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │ 2. PORTFOLIO REPLAY SIMULATOR (portfolio.py)                           │
+ │    • ₹1,000,000 starting cash balance (no leverage / borrow)           │
+ │    • Trailing 3-month cross-sectional momentum ranking (Top 10 / 15)   │
+ │    • Position sizing: capped at 4% notional equity per trade           │
+ │    • Realistic Exchange Circuit Handling:                              │
+ │        - Upper Circuit (UC): Rejects BUY fills (no sellers available)  │
+ │        - Lower Circuit (LC): Traps positions until circuit opens       │
+ │    • Daily marks, fee attribution, and cash ledger tracking            │
+ └───────────────────────────────────┬────────────────────────────────────┘
+                                     │
+                                     ▼
+                  Reports, Trade Logs, Equity Curves & JSON Metrics
 ```
 
-These commands evaluate the three latest calendar months, including the latest month if it is partial. At each month boundary, the optimizer selects parameters or a GP rule using the preceding six calendar months. It freezes the selection for that evaluation month. Those bars become eligible for fitting in the following month. Each month starts flat, and the report shows monthly selections, monthly net returns, and returns compounded across evaluation months. If a strategy has no eligible candidate in a month, its return and full-period compound are shown as unavailable. The chart and validation/test length options apply to the fixed-split report.
+---
 
-`GA_STRATEGY` selects the parameters of four fixed trading rules. The current implementation exhaustively checks 100 configured combinations using a **training-only score**. The package name is historical. The search is deterministic and uses no population, mutation, or generations.
+## 1. Batch Optimization Engine (`batch.py`)
 
-## Run the backtest
+The batch runner evaluates strategies across multiple stocks using expanding/rolling walk-forward windows. Every month, each stock refits all candidate strategies on the preceding 6 calendar months of training data and deploys the highest-scoring candidate out-of-sample for the test month.
 
-From `full_predictor`, using the project’s Python environment:
+### Key Features
+* **Multi-Core Parallelism:** Evaluates multiple stocks concurrently using `ProcessPoolExecutor`.
+* **Out-of-Sample Integrity:** Zero lookahead bias; parameters and GP rules are frozen at month boundaries.
+* **Continuous Compounding:** Stitches positions across monthly boundaries, correctly charging transaction turnover on strategy transitions.
 
-```powershell
-python -m helpers.feature_engineering --csv "datasets/NIFTY50/RELIANCE.csv"
-python -m GA_STRATEGY.main
+### Command Reference
+```bash
+# Full 5-year walk-forward optimization across all stocks using 8 CPU cores
+python -m GA_STRATEGY.batch --workers 8 --years 5 --objective composite --output reports/composite_long_5years
+
+# Run specific stocks
+python -m GA_STRATEGY.batch --stocks RELIANCE HINDALCO ADANIENT --years 3 --output reports/sample_run
+
+# Allow both Long and Short positions (default is Long-Only)
+python -m GA_STRATEGY.batch --workers 8 --years 5 --allow-short --output reports/long_short_run
 ```
 
-The first command regenerates the stock’s Parquet, replacing the file if it already exists. The tester defaults to `datasets/processed_datasets/NIFTY50/RELIANCE.parquet`. Select a different file or split lengths with:
-
-```powershell
-python -m GA_STRATEGY.main --data "C:\data\STOCK.parquet" --train-months 6 --valid-months 1 --test-months 1
-```
-
-To save a PNG of daily compounded returns for the winning configurations and buy and hold, run:
-
-```powershell
-python -m GA_STRATEGY.main --plot reports/ga_cumulative_returns.png
-```
-
-Each panel compounds from its own starting equity and shares the same percentage scale.
-
-## Data loaded
-
-1. [Feature engineering](../helpers/feature_engineering.py) reads a per-stock CSV with `date, open, high, low, close, volume`. It sorts by timestamp and rejects invalid or duplicate timestamps. It aligns the data to the expected market-minute calendar in `eda/eda_outputs/expected_market_minutes.csv`, retaining scheduled minutes from the first through the last source date. Raw timestamps outside the calendar are excluded.
-2. Each valid candle has finite OHLCV, positive prices, nonnegative volume, and consistent high and low bounds. For an eligible gap of one to three missing minutes, the builder fills each missing candle with the same OHLCV mean from equally many valid observed bars on each side. The surrounding bars must be contiguous and in the same session. Filled rows retain `is_missing_bar` and also have `is_imputed_bar` set.
-3. The builder stores the datetime index, OHLCV, quality flags, a `segment_id`, and precomputed features. Indicator history resets at session boundaries, timestamp gaps, and remaining invalid or missing bars. A full rolling window is required for the rolling features. RSI smooths gains and losses using an exponential mean with alpha `1 / period`. Bollinger bands use the rolling close mean plus or minus the configured multiple of sample standard deviation. Donchian uses the highest high and lowest low over the preceding bars, excluding the current candle. Rolling VWAP uses the sum of close times volume divided by the sum of volume. Trend SMA uses the rolling mean close.
-4. The [tester loader](main.py) sorts the Parquet and requires a unique datetime index without missing timestamps. It masks RSI, Bollinger, Donchian, VWAP, and SMA values from the first imputed bar through the end of that segment because the fill can use later prices. It retains observed, valid candles and drops imputed and other missing or invalid rows. An observed bar with masked features can still contribute price returns to an existing position.
-5. The strategies use the saved `rsi_*`, `bb_upper_*`, `bb_lower_*`, `donchian_upper_*`, `donchian_lower_*`, `vwap_*`, and `sma_*` columns. VWAP also calculates its strategy-specific deviation statistic. If required indicator columns are missing, regenerate the file with the current feature builder. Other saved features, including GARCH and MACD, do not enter the four rules.
-
-## Training, validation, and test
-
-The split uses calendar-month offsets from the latest retained bar. By default, test covers the final month, validation covers the preceding month, and training covers the six months before validation. Each cutoff belongs to the later split. The cutoffs preserve the latest timestamp’s time of day, so a boundary can fall within a session. Every split must contain bars. A source with limited history can provide a shorter training period.
-
-Each split starts with unit equity and a flat position. Precomputed features can use earlier bars in the same segment across a split boundary. The VWAP deviation statistic is calculated independently in each split. See [the entry point](main.py) and [the optimizer](engine/ga_optimizer.py).
-
-### Parameters searched
-
-| Strategy | Values tested | Combinations |
-|---|---|---:|
-| VWAP mean reversion | VWAP and deviation window `20, 40, 60, 120`, threshold `1.5, 2, 2.5, 3`, trend SMA `100, 200, 300` | 48 |
-| RSI mean reversion | RSI period `10, 14, 20, 30`, oversold `25, 30, 35`, overbought `65, 70, 75` | 36 |
-| Bollinger mean reversion | Period `20, 40, 60, 80`, standard-deviation multiplier `1.5, 2, 2.5` | 12 |
-| Donchian breakout | Channel period `20, 50, 100, 150` | 4 |
-
-Periods are in bars. The [strategy grid](config/strategies.json) defines the candidates. Added periods or Bollinger multipliers require corresponding feature columns in the Parquet.
-
-For each strategy, the optimizer maximizes this score computed from **training returns after costs**:
-
-```text
-score = 0.7 × Sharpe + 1.3 × Sortino + 0.5 × max_drawdown
-```
-
-`max_drawdown` is a signed decimal, so `-0.10` subtracts `0.05` from the score. The ratios use compounded daily returns. Candidates with undefined Sharpe or Sortino are skipped. For ties, the first configuration in grid order wins. One winning configuration per strategy is evaluated unchanged on validation and test. The score favors risk-adjusted performance, with greater weight on Sortino than Sharpe. Cumulative return appears in the report.
-
-### Signal rules
-
-| Strategy | Go long | Go short |
+### Batch CLI Options
+| Argument | Default | Description |
 |---|---|---|
-| VWAP | Deviation statistic below the negative threshold and close above trend SMA | Deviation statistic above the positive threshold and close below trend SMA |
-| RSI | RSI below oversold | RSI above overbought |
-| Bollinger | Close below lower band | Close above upper band |
-| Donchian | Close above prior channel high | Close below prior channel low |
+| `--workers` | `1` | Number of concurrent stock worker processes. |
+| `--years` | `None` | Number of trailing years to evaluate (e.g. `--years 5` = 60 months). |
+| `--year` | `None` | Single calendar year (e.g. `--year 2022`). |
+| `--objective` | `composite` | Training fitness objective: `composite`, `calmar`, or `blend`. |
+| `--long-only` | `True` | Enforce long-only execution (shorts convert to cash exits). |
+| `--allow-short` | — | Flag to allow both long and short positions. |
+| `--train-months` | `6` | Number of historical months used for fitting. |
+| `--limit` | `5` | Limit number of stocks (`0` processes all available Parquets). |
+| `--stocks` | `None` | Specific stock symbols to process. |
+| `--output` | `reports/batch` | Output directory for CSV reports and plots. |
 
-VWAP’s deviation statistic is `(close − rolling VWAP) / (rolling sample std of close − VWAP differences + 1e-12)`. Its denominator uses a full window of differences within the same segment and split. It divides the current difference by its rolling standard deviation without subtracting the rolling mean of the differences.
+---
 
-Signals are target positions `+1` for long and `−1` for short. The strategy is flat until its first entry and then holds its last position until an opposite signal. Equality, missing indicators, and session changes generate no new signal on their own. There are no stop-loss or take-profit rules. See [strategy implementations](strategies/core_strategies.py).
+## 2. Training Objectives (`engine/objectives.py`)
 
-## Execution and return calculations
+The engine supports 3 distinct training objectives for selecting winning configurations and evaluating GP fitness:
 
-For retained bar `t`, let `C[t]` be the close and `s[t]` the target position decided at that close. The position held over the price move ending at `t` is `s[t-1]`.
+### 1. `composite` (Recommended Default)
+Designed to maximize risk-adjusted return while aggressively penalizing deep drawdowns and capping outsized return outliers:
+$$\text{score} = 0.5 \cdot \text{Sharpe} + 0.8 \cdot \text{Sortino} + \underbrace{2.0 \cdot \text{DD} - 5.0 \cdot \text{DD}^2}_{\text{Progressive Quadratic Penalty}} + 0.4 \cdot \min(\text{Calmar}, 2.0)$$
+* **Quadratic Drawdown Term:** Disproportionately crushes high-drawdown candidates (a 40% DD incurs an exponential penalty compared to a 10% DD).
+* **Calmar Clamping:** Limits Calmar contribution to $+0.8$, preventing extreme bull runs (e.g. 10x CAGR) from masking severe drawdowns.
 
-```text
-market_return[t] = C[t] / C[t-1] - 1
-gross_return[t]  = s[t-1] × market_return[t]
-turnover[t]      = abs(s[t] - s[t-1])
-net_return[t]    = gross_return[t] - 0.0005 × turnover[t]
-equity[t]        = equity[t-1] × (1 + net_return[t])
+### 2. `calmar`
+$$\text{score} = \frac{\text{CAGR}}{|\text{Max Drawdown}|}$$
+Selects the candidate with the highest annual growth relative to its historical peak-to-trough drop.
+
+### 3. `blend`
+$$\text{score} = 0.7 \cdot \text{Sharpe} + 1.3 \cdot \text{Sortino} + 0.5 \cdot \text{Max Drawdown}$$
+The classic linear risk-weighted score favoring Sortino over Sharpe.
+
+---
+
+## 3. Trade-Level Risk Management (`engine/risk.py`)
+
+All strategies (Grid and GP) pass raw trading signals through the central risk engine before execution.
+
+```python
+# Central configuration in engine/risk.py
+DEFAULT_STOP_LOSS   = 0.0075   # 0.75% Stop Loss
+DEFAULT_TAKE_PROFIT = 0.0150   # 1.50% Take Profit
+DEFAULT_LONG_ONLY   = True     # Long-Only mode enabled
 ```
 
-- A signal can earn the next close-to-close move. Its execution cost is charged on the signal bar. A flat-to-position entry costs 5 basis points and a direct long-to-short or short-to-long reversal costs 10 basis points.
-- At the first retained bar of each split, the previous position and market return are zero. A new entry still incurs its cost. The last bar is marked to market, with no forced liquidation or extra closing fee.
-- Returns span adjacent retained closes, including overnight moves and gaps within a split. Positions can carry across sessions and gaps even though the indicators reset by segment. A cross-session move is attributed to the date of the later bar.
-- The model uses close prices and a flat turnover fee. It has no separate spread, slippage, financing, borrow fees, short availability, liquidity limits, or margin model. Short exposure is modeled as the negative of the underlying simple return.
+### Risk Mechanics
+1. **Stop Loss (0.75%):** As soon as unrealized position loss reaches $-0.75\%$, the position is immediately cut to **Cash (`0.0`)**.
+2. **Take Profit (1.50%):** Once position profit reaches $+1.50\%$, profits are locked and the position exits to **Cash (`0.0`)**.
+3. **Re-Entry Protection:** When a position is stopped out, the strategy remains in Cash until the underlying indicator setup resets, preventing rapid-fire re-entry into a crashing asset.
+4. **Long-Only Filter:** Negative signals (`-1.0`) act as pure **exit signals to Cash**, never initiating short positions. This eliminates shorting into strong secular trends.
 
-## Report metrics
+---
 
-| Metric | Calculation |
-|---|---|
-| Net compounded return | Product of `1 + net bar return` over the split, minus one |
-| Buy and hold | Last retained close divided by first retained close, minus one, before costs |
-| Daily returns | Product of `1 + bar return` within each date, minus one |
-| Sharpe | Mean daily net return divided by sample daily standard deviation, multiplied by `sqrt(252)`. The risk-free rate is zero |
-| Sortino | Mean daily net return divided by the root mean square of `min(daily net return, 0)` across all dates, multiplied by `sqrt(252)`. The target return is zero |
-| Max drawdown | Lowest value of `equity / running peak equity − 1`, including starting equity in the peak |
-| Long and short exposure | Fraction of retained bars whose incoming position was long or short, respectively |
-| Position changes | Count of nonzero changes in target position, including the first entry. A reversal counts as one change and two units of turnover |
-| Long and short P&L | Sum of opening bar equity times gross bar return for the corresponding incoming position, in units of starting capital |
-| Cost drag | Sum of opening bar equity times bar execution cost, in units of starting capital |
-| Directional hit rate | Fraction of positioned bars with a nonzero market move that earned positive gross return |
-| Market daily volatility | Sample standard deviation of the underlying’s daily returns for the split |
-| Worst session | Date with the lowest compounded daily net return, and that return |
+## 4. Cash Portfolio Simulation (`portfolio.py`)
 
-Long P&L plus short P&L minus cost drag reconciles to net compounded return. Exposure and hit rate are bar-based. The report displays undefined ratios as `n/a`, such as Sharpe with zero daily volatility and Sortino with zero downside deviation. See [backtester and reporting code](engine/backtester.py).
+`portfolio.py` takes the winning monthly strategies from `monthly_results.csv` and simulates a realistic, cash-constrained delivery portfolio.
 
-To investigate a train-to-test drop, compare long and short P&L with the underlying direction and exposure in each split. Positive gross P&L alongside negative net return identifies a period where modeled costs absorbed the gains. Compare hit rate with P&L and the worst session to distinguish move frequency from move size. Training is the period used to choose the winner, so a strong training score can reflect parameter selection on that sample. The held-out figures describe the subsequent periods for that same configuration.
+### Portfolio Mechanics
+* **Starting Capital:** Default ₹1,000,000 cash ledger.
+* **Position Sizing:** Max **4% marked equity** per trade (e.g. ₹40,000 notional at entry), rounded down to whole shares.
+* **Cross-Sectional Ranking:** Ranks all stocks by **trailing 3-month compounded return**. Only the **Top N** (e.g. Top 10) stocks are eligible to enter positions in any given month.
+* **Execution Delay:** Signals generated at bar $t$ close are executed at the **next bar's Open** ($t+1$).
+* **Friction:** Charges **0.05%** (`DEFAULT_COST = 0.0005`) on all buy and sell notionals.
+
+### Realistic Circuit-Breaker Handling
+In real Indian exchanges (NSE/BSE), stocks frequently hit daily circuit limits (5%, 10%, 20% bands). The portfolio simulator enforces strict market realism:
+
+1. **Upper Circuit (UC) Rejection:**
+   * At Upper Circuit, there are zero sellers in the order book.
+   * **Rule:** If $\text{Day Return} \ge +4.8\%$ and price is pinned flat ($\text{High} == \text{Low}$), all **BUY orders are canceled**. No phantom paper fills.
+2. **Lower Circuit (LC) Trap Modeling:**
+   * At Lower Circuit, there are zero buyers in the order book.
+   * **Rule:** If a position needs to exit (via Stop Loss or strategy signal) during Lower Circuit, **the sale cannot execute immediately**. The position remains open, takes daily mark-to-market losses, and **only executes when the circuit unlocks** and trading volume resumes.
+
+### Portfolio Command Reference
+```bash
+python -m GA_STRATEGY.portfolio \
+    --results reports/composite_long_5years/monthly_results.csv \
+    --capital 1000000 \
+    --allocation 0.04 \
+    --top 10 \
+    --output reports/top10_portfolio
+```
+
+---
+
+## 5. Directory Structure & Key Files
+
+```text
+GA_STRATEGY/
+├── batch.py                 # Walk-forward batch runner across all stocks
+├── portfolio.py             # Top-N cash-ledger portfolio replay with circuit filters
+├── main.py                  # Single-stock backtester and walk-forward CLI
+├── config/
+│   └── strategies.json      # Parameter grid definitions for GA strategies
+├── engine/
+│   ├── objectives.py        # Composite, Calmar, and Blend fitness functions
+│   ├── risk.py              # Central SL/TP and Long-Only risk management
+│   ├── backtester.py        # P&L accounting, metric calculations, and ledger
+│   ├── ga_optimizer.py      # Grid search optimizer for parametric strategies
+│   └── gp_optimizer.py      # Genetic programming rule tree evolution engine
+└── strategies/
+    └── core_strategies.py   # Vectorized RSI, Bollinger, Donchian & VWAP strategies
+```
+
+---
+
+## 6. Generated Output Artifacts
+
+### Batch Optimizer Outputs (`reports/batch/`)
+* **`monthly_results.csv`:** Detailed per-month results for every strategy and stock, including parameter JSONs, training scores, out-of-sample returns, drawdowns, and transaction costs.
+* **`stock_summary.csv`:** Full 5-year compounded CAGR, Calmar ratio, cumulative return, and max drawdown for every stock.
+* **`stock_rankings.csv`:** Ranking of all stocks based on the walk-forward selected monthly strategy.
+* **`plots/STOCK.png`:** Equity curves comparing each strategy family, the monthly-selected approach, and Buy & Hold.
+
+### Portfolio Outputs (`reports/portfolio/`)
+* **`portfolio_value.png`:** Total marked portfolio equity vs. cash balance over time.
+* **`portfolio_value.csv`:** Daily time series of total equity, cash, invested capital, and open position counts.
+* **`executed_trades.csv`:** Complete ledger of every executed fill (timestamp, stock, BUY/SELL, shares, price, fees, and execution notes).
+* **`monthly_stock_ranks.csv`:** Trailing 3-month scores, eligibility flags, and monthly ranks for each stock.
+* **`summary.json`:** High-level summary of total return, daily max drawdown, total fees paid, fill count, and capital utilization.
+
+---
+
+## 7. Recommended Workflow Summary
+
+```powershell
+# Step 1: Run full 5-year walk-forward optimization (Long-Only, Composite Objective)
+python -m GA_STRATEGY.batch --workers 8 --years 5 --objective composite --output reports/composite_5years_run
+
+# Step 2: Simulate Top-10 cash-allocated portfolio with circuit filters
+python -m GA_STRATEGY.portfolio --results reports/composite_5years_run/monthly_results.csv --capital 1000000 --allocation 0.04 --top 10 --output reports/portfolio_top10
+```
+
+
+### FYERS charges in training and batch evaluation
+
+See the [execution engine guide](engine/README.md) for calculations, settings,
+worked examples, report fields, and differences from portfolio execution.
+
+GA grid candidates and GP rules now optimize returns after the shared
+`engine/fees.py` FYERS charges, including brokerage, STT, exchange charges,
+SEBI, IPFT, stamp duty and GST. This supersedes the earlier fixed 0.0005
+cost description. Income tax is not deducted. Current tariff estimates are
+applied throughout historical data; this is not a historical tariff schedule.
+
+Set `STARTING_CAPITAL` (default 1,000,000 rupees) and `ALLOCATION` (default
+0.12) in `engine/execution.py`. Each strategy has its own unleveraged scoring
+account. Whole shares are sized from current equity at entry and held until
+exit; fees use actual order turnover and the shared per-order rounding.
+A reversal incurs separate closing and opening orders. Training/validation/
+test evaluations each start a fresh account. In batch, each strategy and
+Selected carry their account equity from one evaluation month into the next.
+Monthly and full-history reports expose fees, fills, charge components,
+initial/final equity, allocation and fee-model metadata. Charts and rankings
+use those same after-charge returns.
+
+Execution assumption: signals fill at the observed close; new positions are
+allowed before 15:00 and positions exit at 15:15 or the last observed bar of
+the day if earlier. The latter assumes a successful early close even with
+missing bars. Each evaluation slice liquidates its last position. These are
+idealized intraday fills, without slippage, circuit restrictions, leverage,
+forced broker square-off fees or delivery conversion. The portfolio engine
+continues to handle its own next-open fills and funding/blocked-exit rules.
+Sharing charges does not make these execution models identical. Risk signals
+are still generated by the existing strategy risk logic.
+
+Existing CSVs are unchanged. Rerun GA/GP and batch into a new output folder,
+then use the new monthly_results.csv for portfolio selection. Previous
+reports used different fee, sizing and holding assumptions, so they are not
+directly comparable to the new reports.
