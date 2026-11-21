@@ -12,29 +12,53 @@ def finalize_strategy(ret, signal, cost):
     return gross - signal.diff().fillna(signal).abs() * cost
 
 def to_daily_returns(minute_ret):
+    if minute_ret.empty:
+        return pd.Series(dtype=float)
     minute_ret = minute_ret.dropna()
-    log_ret = np.log1p(minute_ret)
-    daily_log = log_ret.groupby(log_ret.index.date).sum()
-    daily = np.expm1(daily_log)
-    daily.index = pd.to_datetime(daily.index)
-    return daily
+    if minute_ret.empty:
+        return pd.Series(dtype=float)
+    idx = minute_ret.index
+    day_tags = idx.floor("D")
+    changes = np.flatnonzero(day_tags[1:] != day_tags[:-1]) + 1
+    starts = np.r_[0, changes]
+    log_vals = np.log1p(minute_ret.to_numpy(dtype=float))
+    daily_log = np.add.reduceat(log_vals, starts)
+    daily_vals = np.expm1(daily_log)
+    return pd.Series(daily_vals, index=day_tags[starts])
 
 def sharpe(daily):
-    deviation = daily.std()
+    if hasattr(daily, "to_numpy"):
+        arr = daily.to_numpy(dtype=float)
+    else:
+        arr = np.asarray(daily, dtype=float)
+    if len(arr) <= 1:
+        return None
+    deviation = float(np.std(arr, ddof=1))
     if not np.isfinite(deviation) or deviation == 0:
         return None
-    return float(daily.mean() / deviation * np.sqrt(252))
+    return float(np.mean(arr) / deviation * np.sqrt(252))
 
 def sortino(daily):
-    downside = np.sqrt(daily.clip(upper=0).pow(2).mean())
+    if hasattr(daily, "to_numpy"):
+        arr = daily.to_numpy(dtype=float)
+    else:
+        arr = np.asarray(daily, dtype=float)
+    if len(arr) == 0:
+        return None
+    down = np.minimum(arr, 0.0)
+    downside = float(np.sqrt(np.mean(down ** 2)))
     if not np.isfinite(downside) or downside == 0:
         return None
-    return float(daily.mean() / downside * np.sqrt(252))
+    return float(np.mean(arr) / downside * np.sqrt(252))
 
 def max_drawdown(minute_ret):
-    eq = (1 + minute_ret.fillna(0)).cumprod()
-    peak = eq.cummax().clip(lower=1.0)
-    return float((eq / peak - 1).min())
+    arr = minute_ret.to_numpy(dtype=float) if hasattr(minute_ret, "to_numpy") else np.asarray(minute_ret, dtype=float)
+    if len(arr) == 0:
+        return 0.0
+    eq = np.cumprod(1.0 + np.nan_to_num(arr, nan=0.0))
+    peak = np.maximum.accumulate(eq)
+    np.maximum(peak, 1.0, out=peak)
+    return float((eq / peak - 1.0).min())
 
 
 class StrategyProfitCalculator:
@@ -85,9 +109,18 @@ class StrategyProfitCalculator:
 
 
 def calmar_ratio(returns, drawdown):
-    years = (returns.index[-1] - returns.index[0]).total_seconds() / (365.25 * 86400)
-    growth = float((1 + returns.fillna(0)).prod())
-    if years <= 0 or growth <= 0 or drawdown >= 0:
+    if drawdown is None or drawdown >= 0:
+        return None
+    if hasattr(returns, "index"):
+        years = (returns.index[-1] - returns.index[0]).total_seconds() / (365.25 * 86400)
+        arr = returns.to_numpy(dtype=float)
+    else:
+        arr = np.asarray(returns, dtype=float)
+        years = len(arr) / (252.0 * 375.0)
+    if years <= 0:
+        return None
+    growth = float(np.prod(1.0 + np.nan_to_num(arr, nan=0.0)))
+    if growth <= 0:
         return None
     with np.errstate(over="ignore", invalid="ignore"):
         score = np.expm1(np.log(growth) / years) / abs(drawdown)

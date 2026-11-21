@@ -3,12 +3,13 @@
 import math
 import random
 
+import numpy as np
 import pandas as pd
 
 from .backtester import DEFAULT_COST
 from .ga_optimizer import evaluate
 from .objectives import DEFAULT_OBJECTIVE, training_score
-from .risk import DEFAULT_STOP_LOSS, DEFAULT_TAKE_PROFIT, apply_risk_management
+from .risk import DEFAULT_STOP_LOSS, DEFAULT_TAKE_PROFIT, apply_risk_management, risk_candidates
 
 
 # Comparisons are leaves. Boolean operators only accept Boolean subtrees.
@@ -57,26 +58,63 @@ def describe(tree):
     return f"{left} {op} {right:g}"
 
 
-def rule_values(frame, tree):
+def _rule_values_np(feats, tree):
     op, left, right = tree
     if op == "AND":
-        return rule_values(frame, left) & rule_values(frame, right)
+        return _rule_values_np(feats, left) & _rule_values_np(feats, right)
     if op == "OR":
-        return rule_values(frame, left) | rule_values(frame, right)
-    values = frame[left]
-    return values.lt(right) if op == "<" else values.gt(right)
+        return _rule_values_np(feats, left) | _rule_values_np(feats, right)
+    arr = feats[left]
+    return (arr < right) if op == "<" else (arr > right)
+
+
+_GP_CACHE = {}
+
+
+def _get_frame_arrays(frame):
+    key = (id(frame), len(frame))
+    cached = _GP_CACHE.get(key)
+    if cached is not None:
+        return cached[0], cached[1], cached[2]
+    if len(_GP_CACHE) > 32:
+        _GP_CACHE.clear()
+    feats = {col: frame[col].to_numpy(dtype=float) for col in FEATURE_THRESHOLDS if col in frame.columns}
+    valids = {col: ~np.isnan(feats[col]) for col in feats}
+    close = frame["Close"].to_numpy(dtype=float)
+    _GP_CACHE[key] = (feats, valids, close)
+    return feats, valids, close
+
+
+def rule_values(frame, tree):
+    feats, _, _ = _get_frame_arrays(frame)
+    res = _rule_values_np(feats, tree)
+    return pd.Series(res, index=frame.index)
 
 
 def run_rule(frame, tree, cost, finalize):
+    # Older saved reports pass a bare tree; new reports also carry risk settings.
+    params = tree if isinstance(tree, dict) else {}
+    tree = params.get("tree", tree)
+    feats, valids, close = _get_frame_arrays(frame)
     used_features = {subtree(tree, path)[1] for path in paths(tree)
                      if subtree(tree, path)[0] in ("<", ">")}
-    available = frame[list(used_features)].notna().all(axis=1)
-    raw_signal = (rule_values(frame, tree) & available).astype(float)
-    signal = apply_risk_management(frame["Close"], raw_signal)
+    avail = np.ones(len(close), dtype=bool)
+    for f in used_features:
+        if f in valids:
+            avail &= valids[f]
+    raw_signal = np.where(_rule_values_np(feats, tree) & avail, 1.0, 0.0)
+    signal = apply_risk_management(
+        frame["Close"], pd.Series(raw_signal, index=frame.index),
+        stop_loss=params.get("stop_loss", DEFAULT_STOP_LOSS),
+        take_profit=params.get("take_profit", DEFAULT_TAKE_PROFIT),
+        long_only=True,
+    )
+    if finalize is not None and getattr(finalize, "__name__", "") == "_noop_finalize":
+        return None, signal
     return finalize(frame["Close"].pct_change(), signal, cost), signal
 
 
-def optimize_rules(splits, *, seed=42, population_size=40, generations=12, include_curves=False, include_tree=False, objective=DEFAULT_OBJECTIVE):
+def optimize_rules(splits, *, seed=42, population_size=40, generations=12, include_curves=False, include_tree=False, objective=DEFAULT_OBJECTIVE, leverage=1.0):
     if population_size < 4 or generations < 1:
         raise ValueError("GP needs at least four candidates and one generation.")
     train = splits["train"]
@@ -86,16 +124,21 @@ def optimize_rules(splits, *, seed=42, population_size=40, generations=12, inclu
     rng = random.Random(seed)
     population = [BASELINE, *(random_tree(rng, 3) for _ in range(population_size - 1))]
     fitness = {}
+    best_risk = {}
+    risk_grid = risk_candidates()
 
     def score(tree):
         if tree not in fitness:
-            stats = evaluate(train, run_rule, tree, DEFAULT_COST)
-            value = training_score(stats, objective)
-            if value is None:
-                fitness[tree] = -math.inf
-            else:
-                size = sum(1 for _ in paths(tree))
-                fitness[tree] = value - 0.01 * size
+            best_value = -math.inf
+            chosen = risk_grid[0]
+            for risk_params in risk_grid:
+                stats = evaluate(train, run_rule, {"tree": tree, **risk_params}, DEFAULT_COST, leverage=leverage)
+                value = training_score(stats, objective)
+                if value is not None and value > best_value:
+                    best_value, chosen = value, risk_params
+            best_risk[tree] = chosen
+            size = sum(1 for _ in paths(tree))
+            fitness[tree] = best_value - 0.01 * size
         return fitness[tree]
 
     for generation in range(generations):
@@ -123,11 +166,11 @@ def optimize_rules(splits, *, seed=42, population_size=40, generations=12, inclu
             results[name] = (None, None, dict.fromkeys(splits))
             continue
         reports = {
-            period: evaluate(frame, run_rule, tree, DEFAULT_COST, report=True, include_curves=include_curves)
+            period: evaluate(frame, run_rule, {"tree": tree, **best_risk[tree]}, DEFAULT_COST, report=True, include_curves=include_curves, leverage=leverage)
             for period, frame in splits.items()
         }
         results[name] = (valid_score if math.isfinite(valid_score) else None,
-                         {"rule": describe(tree)}, reports)
+                         {"rule": describe(tree), **best_risk[tree]}, reports)
         if include_tree:
             results[name][1]["tree"] = tree
     return results

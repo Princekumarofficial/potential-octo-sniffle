@@ -126,3 +126,52 @@ Existing CSVs are unchanged. Rerun GA/GP and batch into a new output folder,
 then use the new monthly_results.csv for portfolio selection. Previous
 reports used different fee, sizing and holding assumptions, so they are not
 directly comparable to the new reports.
+
+
+## Optimizing stop loss, take profit, and reward-to-risk
+
+GA parameter search and GP now select risk settings using training data only.
+The shared search space is `config/risk.json`:
+
+```json
+{
+  "stop_loss": [0.005, 0.0075, 0.01],
+  "risk_reward_ratio": [1.0, 2.0, 3.0]
+}
+```
+
+Stop losses are fractions of entry price: 0.005 means 0.5%. The
+`risk_reward_ratio` field is specifically **reward divided by risk**, TP / SL.
+Take profit is derived as `stop_loss * risk_reward_ratio`. For example,
+SL 0.75% and ratio 2 produce TP 1.5%. These are gross price-distance targets,
+not guaranteed realized gains/losses or ratios after fees.
+
+GA searches the Cartesian product of indicator parameters and the nine risk
+pairs. GP evaluates each unique rule under all nine pairs, retains its best
+training pair, and uses that score (with the existing complexity penalty)
+to evolve the rule population. This is nested risk-grid search, not mutation
+of separate risk genes. Both use the configured after-charge objective.
+Validation and test results do not choose risk settings. The reported RSI
+baseline also receives training-only risk tuning.
+
+Saved parameters include `stop_loss`, `take_profit`, and `risk_reward_ratio`.
+GP reports also preserve their rule and, where requested, tree. Batch passes
+the complete parameter dictionary to replay; portfolio does the same.
+Older GP tree-only inputs and saved reports without risk keys still use the
+previous defaults (0.75% SL, 1.5% TP). New settings require retraining; they
+are not retroactively inferred for old CSVs.
+
+Stops and targets are checked against observed closing prices. A crossing
+can therefore exit beyond its nominal threshold. A stop or target exit holds
+the signal at cash until its raw target changes or a new session begins.
+Risk tracking resets on daily liquidation so the following session starts
+with a fresh entry reference. It uses the scoring engine's existing session
+cutoffs; it does not recalculate entry references from portfolio next-open
+fills. Portfolio execution and scoring can still differ.
+
+Allocation, leverage, trailing stops, and maximum holding time are not added
+to this search. Allocation and leverage retain their existing controls.
+With the default grid, GA has nine times as many combinations, and each GP
+rule needs nine training evaluations. Reduce the lists in `risk.json` to
+limit runtime; one value in each list fixes the risk settings. SL and derived
+TP must be positive and below 100%, with a finite positive ratio.

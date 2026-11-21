@@ -44,7 +44,7 @@ def evaluation_months(index, train_months, end_month=None, recent_months=None, s
     return months
 
 
-def evaluate_stock(stock, frame, months, train_months, valid_months, gp_options, plot_dir=None, objective=DEFAULT_OBJECTIVE):
+def evaluate_stock(stock, frame, months, train_months, valid_months, gp_options, plot_dir=None, objective=DEFAULT_OBJECTIVE, leverage=1.0):
     config = load_config()
     names = [*config, "GP", "Selected"]
     histories = {name: [] for name in names}
@@ -59,8 +59,8 @@ def evaluate_stock(stock, frame, months, train_months, valid_months, gp_options,
         if train.empty or test.empty or frame.index[0].to_period("M") > fit_start.to_period("M"):
             raise ValueError(f"Insufficient data for {stock} in {month}")
         with contextlib.redirect_stdout(io.StringIO()):
-            grid = genetic_optimize(train, train, objective=objective)
-            gp = optimize_rules({"train": train}, include_tree=True, objective=objective, **gp_options)
+            grid = genetic_optimize(train, train, objective=objective, leverage=leverage)
+            gp = optimize_rules({"train": train}, include_tree=True, objective=objective, leverage=leverage, **gp_options)
         candidates = {**grid, "GP": gp["GP"]}
         # Compare all winners using the same unpenalized training objective.
         scores = {}
@@ -76,7 +76,7 @@ def evaluate_stock(stock, frame, months, train_months, valid_months, gp_options,
             signal = pd.Series(0.0, index=test.index)
             if params is not None:
                 fn = run_rule if name == "GP" else getattr(core_strategies, config[name]["function"])
-                arguments = params["tree"] if name == "GP" else params
+                arguments = params
                 _, signal = fn(test, arguments, DEFAULT_COST, finalize_strategy)
             signals[name] = signal
         signals["Selected"] = signals.get(winner, pd.Series(0.0, index=test.index))
@@ -89,7 +89,7 @@ def evaluate_stock(stock, frame, months, train_months, valid_months, gp_options,
                 prior_close, prior_signal = previous[-1]
                 context_close = pd.concat([prior_close.iloc[-1:], context_close])
                 context_signal = pd.concat([prior_signal.iloc[-1:], context_signal])
-            returns = execution_returns(test["Close"], signal, capital=capitals[name])
+            returns = execution_returns(test["Close"], signal, capital=capitals[name], leverage=leverage)
             execution = returns.attrs["execution"]
             capitals[name] = execution["final_equity"]
             net_history[name].append(returns)
@@ -192,10 +192,11 @@ def process_stock(task):
         if args.valid_months >= len(months):
             raise ValueError("The requested validation labels leave no test months.")
         print(f"{path.stem}: {len(months)} evaluation months, {months[0]} through {months[-1]}", flush=True)
+        leverage = getattr(args, "leverage", 1.0)
         monthly, summary = evaluate_stock(
             path.stem, frame, months, args.train_months, args.valid_months,
             dict(seed=args.seed, population_size=args.gp_population, generations=args.gp_generations),
-            plot_dir=args.output / "plots", objective=args.objective,
+            plot_dir=args.output / "plots", objective=args.objective, leverage=leverage,
         )
         return monthly, summary, None
     except (ValueError, KeyError, OSError) as error:
@@ -219,6 +220,8 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output", type=Path, default=Path("reports/batch"))
     parser.add_argument("--workers", type=int, default=1, help="Number of stocks processed concurrently.")
+    parser.add_argument("--leverage", type=float, default=1.0,
+                        help="Intraday leverage multiplier (1.0 to 5.0). Default is 1.0 (unleveraged).")
     parser.add_argument("--objective", choices=OBJECTIVES, default=DEFAULT_OBJECTIVE)
     parser.add_argument("--long-only", dest="long_only", action="store_true", default=True,
                         help="Only take long positions (no shorting). Default is True.")
@@ -238,8 +241,9 @@ def main():
 
     if (min(args.train_months, args.gp_generations, args.workers) < 1 or args.valid_months < 0
             or (args.test_months is not None and args.test_months < 1)
-            or args.limit < 0 or args.gp_population < 4):
-        parser.error("Workers, training/test months and generations must be positive, population at least 4, and limits nonnegative.")
+            or args.limit < 0 or args.gp_population < 4
+            or not 1.0 <= args.leverage <= 5.0):
+        parser.error("Workers, training/test months and generations must be positive, population at least 4, limits nonnegative, and leverage in [1.0, 5.0].")
     paths = sorted(args.data_dir.glob("*.parquet"))
     if args.stocks:
         wanted = set(symbol.upper() for symbol in args.stocks)

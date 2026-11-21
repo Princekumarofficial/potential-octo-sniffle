@@ -12,13 +12,13 @@ from .engine.ga_optimizer import load_config
 from .engine.gp_optimizer import run_rule
 from .engine.backtester import DEFAULT_COST, finalize_strategy
 from .strategies import core_strategies
-from .engine.fees import COMPONENTS, intraday_charges, affordable_shares
+from .engine.fees import COMPONENTS, intraday_charges, affordable_shares, us_intraday_charges
 
 ENTRY_CUTOFF_MINUTE = 15 * 60
 SQUARE_OFF_MINUTE = 15 * 60 + 15
 
 
-def rank_months(selected, top_n=10):
+def rank_months(selected, top_n=10, ranking_months=3, start_month=None):
     if selected.duplicated(["stock", "month"]).any():
         raise ValueError("Duplicate stock-month selections in the input.")
     returns = selected.pivot(index="month", columns="stock", values="net_return")
@@ -27,16 +27,20 @@ def rank_months(selected, top_n=10):
     records = []
     eligible = {}
     for i, month in enumerate(calendar):
-        if i < 3:
+        if i < ranking_months:
             continue
-        history = returns.iloc[i-3:i]
+        if start_month is not None and month < pd.Period(start_month, freq="M"):
+            continue
+        history = returns.iloc[i-ranking_months:i]
         scores = ((1 + history).prod() - 1).where(history.notna().all())
         scores = scores.dropna().sort_index().sort_values(ascending=False, kind="stable")
+        if len(scores) < min(top_n, 3):
+            continue
         eligible[month] = set(scores.head(top_n).index)
         for rank, (stock, score) in enumerate(scores.items(), 1):
             records.append(dict(month=str(month), stock=stock, rank=rank,
                                 trailing_return=score, eligible=rank <= top_n,
-                                history_start=str(calendar[i-3]), history_end=str(calendar[i-1])))
+                                history_start=str(calendar[i-ranking_months]), history_end=str(calendar[i-1])))
     return eligible, pd.DataFrame(records)
 
 
@@ -57,7 +61,7 @@ def prepare(selected, data_dir, eligible):
             signal = pd.Series(0., index=bars.index)
             if params is not None:
                 if row.selected_strategy == "GP":
-                    _, signal = run_rule(bars, params["tree"], DEFAULT_COST, finalize_strategy)
+                    _, signal = run_rule(bars, params, DEFAULT_COST, finalize_strategy)
                 elif row.selected_strategy != "Cash":
                     params = {**params, "long_only": True}
                     fn = getattr(core_strategies, config[row.selected_strategy]["function"])
@@ -91,15 +95,16 @@ def prepare(selected, data_dir, eligible):
         allowed_months = [month for month, stocks in eligible.items() if stock in stocks]
         allowed = dates.to_period("M").isin(allowed_months)
         minutes = dates.hour * 60 + dates.minute
-        # User-configured session exits, before broker administrative square-off.
-        target = np.where(allowed & (minutes < SQUARE_OFF_MINUTE), target, 0)
+        is_us = (minutes.max() > 930) if len(minutes) else False
+        square_off_min = 955 if is_us else SQUARE_OFF_MINUTE
+        target = np.where(allowed & (minutes < square_off_min), target, 0)
         changes = np.flatnonzero(np.diff(np.r_[0, target]) != 0)
         opens = bars.Open.to_numpy(float)
         closes = bars.Close.to_numpy(float)
         timestamps = dates.asi8
         market[stock] = (timestamps, opens, closes, is_uc, is_lc)
         # Add scheduled exits even if the target was already flat.
-        scheduled = np.flatnonzero(minutes >= SQUARE_OFF_MINUTE)
+        scheduled = np.flatnonzero(minutes >= square_off_min)
         # Pending lower-circuit exits may retry at observed unlocked bars.
         unlocks = np.flatnonzero(np.r_[False, is_lc[:-1] & ~is_lc[1:]])
         session_starts = np.flatnonzero(~dates.normalize().duplicated())
@@ -142,6 +147,12 @@ def simulate(market, events, eligible, capital=1_000_000., allocation=.04, cost=
     converted = set()
     overnight_records = []
 
+    first_times = next(iter(market.values()))[0] if market else np.array([])
+    market_mins = pd.to_datetime(first_times).hour * 60 + pd.to_datetime(first_times).minute if len(first_times) else np.array([])
+    is_us = bool((market_mins.max() > 930)) if len(market_mins) else False
+    square_off_limit = 955 if is_us else SQUARE_OFF_MINUTE
+    entry_cutoff_limit = 945 if is_us else ENTRY_CUTOFF_MINUTE
+
     def value(timestamp, at_close=False):
         total = cash
         for stock, quantity in holdings.items():
@@ -152,16 +163,18 @@ def simulate(market, events, eligible, capital=1_000_000., allocation=.04, cost=
             total += quantity * price
         return total - sum(financing.values())
 
-    def charges(notional, side):
+    def charges(notional, side, shares=0):
         if cost is not None:
             return {**dict.fromkeys(COMPONENTS, 0.), "fee": notional * cost}
+        if is_us:
+            return us_intraday_charges(notional, side, shares)
         return intraday_charges(notional, side)
 
     def sell(stock, price, timestamp, note):
         nonlocal cash
         quantity = holdings.pop(stock)
         detail = (intraday_charges(quantity * price, "SELL", delivery=True)
-                  if stock in converted and cost is None else charges(quantity * price, "SELL"))
+                  if stock in converted and cost is None else charges(quantity * price, "SELL", quantity))
         converted.discard(stock)
         entries.pop(stock, None)
         cash += quantity * price - detail["fee"] - financing.pop(stock, 0.)
@@ -197,17 +210,17 @@ def simulate(market, events, eligible, capital=1_000_000., allocation=.04, cost=
             if stock in trapped_exits and not is_lc and stock in holdings:
                 sell(stock, price, timestamp, "PENDING_EXIT_FILLED")
                 exited.add(stock)
-            if (target == 0 or stamp.hour * 60 + stamp.minute >= SQUARE_OFF_MINUTE) and stock in holdings:
+            if (target == 0 or stamp.hour * 60 + stamp.minute >= square_off_limit) and stock in holdings:
                 if is_lc:
                     trapped_exits.add(stock)
                 else:
-                    note = "SCHEDULED_EXIT" if stamp.hour * 60 + stamp.minute >= SQUARE_OFF_MINUTE else "NORMAL_SELL"
+                    note = "SCHEDULED_EXIT" if stamp.hour * 60 + stamp.minute >= square_off_limit else "NORMAL_SELL"
                     sell(stock, price, timestamp, note)
 
         equity = value(timestamp)
         budget = equity * allocation
         for stock, target, price, is_uc, is_lc in normalized:
-            if target != 1 or stock in holdings or stock in exited or stamp.hour * 60 + stamp.minute >= ENTRY_CUTOFF_MINUTE:
+            if target != 1 or stock in holdings or stock in exited or stamp.hour * 60 + stamp.minute >= entry_cutoff_limit:
                 continue
             if is_uc or is_lc:
                 continue
@@ -279,6 +292,8 @@ def main():
     parser.add_argument("--capital", type=float, default=1_000_000)
     parser.add_argument("--allocation", type=float, default=.04)
     parser.add_argument("--top", type=int, default=10)
+    parser.add_argument("--ranking-months", type=int, default=3, help="Number of trailing months for stock ranking.")
+    parser.add_argument("--start-month", help="First portfolio execution month (YYYY-MM).")
     parser.add_argument("--leverage", type=float, default=1., help="Assumed intraday leverage, 1 to 5.")
     parser.add_argument("--allocation-mode", choices=("notional", "margin"), default="notional")
     parser.add_argument("--leverage-file", type=Path, help="JSON mapping stock symbols to leverage limits.")
@@ -290,8 +305,8 @@ def main():
             not isinstance(limit, (int, float)) or not 1 <= limit <= 5 for limit in limits.values()):
         parser.error("--leverage-file must map stock symbols to numbers between 1 and 5.")
 
-    if args.top < 1 or args.capital <= 0 or not 0 < args.allocation <= 1:
-        parser.error("Top and capital must be positive and allocation in (0, 1].")
+    if args.top < 1 or args.capital <= 0 or not 0 < args.allocation <= 1 or args.ranking_months < 1:
+        parser.error("Top, capital, and ranking-months must be positive and allocation in (0, 1].")
     selected = pd.read_csv(args.results)
     selected = selected.loc[selected.strategy.eq("Selected")].copy()
     if selected.empty:
@@ -299,9 +314,9 @@ def main():
     if "short_exposure" in selected and selected.short_exposure.gt(0).any():
         parser.error("Use long-only batch results for this cash-funded portfolio.")
     selected["month"] = pd.PeriodIndex(selected.month, freq="M")
-    eligible, ranks = rank_months(selected, args.top)
+    eligible, ranks = rank_months(selected, args.top, ranking_months=args.ranking_months, start_month=args.start_month)
     if not eligible:
-        parser.error("At least four months are needed for ranking and execution.")
+        parser.error("At least enough months are needed for ranking and execution.")
     market, events, candidates = prepare(selected, args.data_dir, eligible)
     curve, trades = simulate(market, events, eligible, args.capital, args.allocation,
                              leverage=args.leverage, allocation_mode=args.allocation_mode, leverage_by_stock=limits)
@@ -324,9 +339,9 @@ def main():
                    cumulative_return=float(growth-1), daily_max_drawdown=float((curve.equity/peak-1).min()),
                    fees=float(trades.fee.sum()), fills=int(trades.side.isin(["BUY", "SELL"]).sum()), overnight_stock_days=len(curve.attrs["overnight_positions"]), allocation=args.allocation,
                    leverage=args.leverage, allocation_mode=args.allocation_mode, leverage_by_stock=limits,
-                   margin_events=len(curve.attrs["margin_events"]), ranking_months=3, top=args.top, start=str(curve.date.iloc[0]),
+                   margin_events=len(curve.attrs["margin_events"]), ranking_months=args.ranking_months, top=args.top, start=str(curve.date.iloc[0]),
                    end=str(curve.date.iloc[-1]),
-                   fee_model="FYERS Standard NSE intraday, current tariff checked 2026-11-16",
+                   fee_model="US Regulated Equities ($0 Commission, SEC Section 31 + FINRA TAF)" if any((pd.to_datetime(item[0]).hour * 60 + pd.to_datetime(item[0]).minute).max() > 930 for item in market.values() if len(item[0])) else "FYERS Standard NSE intraday, current tariff checked 2026-11-16",
                    rounding="Per-component per-order paise estimates",
                    charge_breakdown={key: float(trades[key].sum()) for key in COMPONENTS})
     (args.output / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")

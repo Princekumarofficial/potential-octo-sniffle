@@ -54,3 +54,17 @@ class ExecutionTests(unittest.TestCase):
         self.assertAlmostEqual(summary["cumulative_return"], (1+rows[0]["net_return"])*(1+rows[1]["net_return"])-1)
         self.assertAlmostEqual(summary["fees"], sum(r["fees"] for r in rows))
         self.assertEqual(rows[1]["initial_capital"], rows[0]["final_equity"])
+
+    def test_leverage_scales_position_and_charges(self):
+        ix = pd.to_datetime(["2024-01-01 10:00", "2024-01-01 10:01", "2024-01-01 15:15"])
+        close = pd.Series([100., 110., 110.], index=ix)
+        net_1x = execution_returns(close, pd.Series(1., index=ix), capital=10000, allocation=.12, leverage=1.0)
+        net_5x = execution_returns(close, pd.Series(1., index=ix), capital=10000, allocation=.12, leverage=5.0)
+        # 1x buys 12 shares (1200 notional), 5x buys 60 shares (6000 notional)
+        fees_1x = intraday_charges(1200, "BUY")["fee"] + intraday_charges(1320, "SELL")["fee"]
+        fees_5x = intraday_charges(6000, "BUY")["fee"] + intraday_charges(6600, "SELL")["fee"]
+        self.assertAlmostEqual(net_1x.attrs["execution"]["fees"], fees_1x)
+        self.assertAlmostEqual(net_5x.attrs["execution"]["fees"], fees_5x)
+        self.assertGreater(fees_5x, fees_1x)
+        # Gross gain without fees: 1x = 12 * 10 = 120, 5x = 60 * 10 = 600
+        self.assertAlmostEqual((1+net_5x).prod()*10000, 10600 - fees_5x)
