@@ -503,6 +503,7 @@ class GeneralTrainer:
                 dataloader=loader,
                 device=self.device,
                 target_scaler=target_scaler,
+                previous_values=0.0,  # Score the sign of each unscaled return.
                 plot=False,
             )
 

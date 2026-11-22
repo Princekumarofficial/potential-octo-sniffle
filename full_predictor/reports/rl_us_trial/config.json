@@ -1,0 +1,18 @@
+{
+  "market": "us",
+  "source_timezone": null,
+  "data_dir": "datasets\\processed_datasets\\us_stocks",
+  "results": "reports\\batch_us_stocks_5x\\monthly_results.csv",
+  "stocks": [
+    "AAPL",
+    "MSFT",
+    "NVDA"
+  ],
+  "train_end": "2026-06-01",
+  "valid_end": "2026-09-01",
+  "epochs": 5,
+  "seed": 42,
+  "capital": 100000.0,
+  "allocation": 0.04,
+  "output": "reports\\rl_us_trial"
+}

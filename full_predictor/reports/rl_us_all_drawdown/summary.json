@@ -1,0 +1,20 @@
+{
+  "device": "cpu",
+  "stocks": 95,
+  "cash_baseline_return": 0.0,
+  "validation_selection_score": 0.022437300889823764,
+  "valid": {
+    "cumulative_return": 0.04001669999999713,
+    "max_drawdown": -0.017579399110173366,
+    "final_equity": 104001.6699999997,
+    "fees": 70.95,
+    "fills": 1280
+  },
+  "test": {
+    "cumulative_return": 0.040163499999999575,
+    "max_drawdown": -0.013770438621195535,
+    "final_equity": 104016.34999999995,
+    "fees": 57.03,
+    "fills": 1040
+  }
+}

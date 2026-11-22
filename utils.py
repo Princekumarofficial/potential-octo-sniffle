@@ -1507,6 +1507,7 @@ def predict_and_store_window_model(
             loader,
             device=device,
             target_scaler=target_scaler,
+            previous_values=0.0,  # A return's direction is measured from zero.
             plot=False,
         )
 
