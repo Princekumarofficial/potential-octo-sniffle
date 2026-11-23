@@ -1,0 +1,20 @@
+{
+  "device": "cuda",
+  "stocks": 95,
+  "cash_baseline_return": 0.0,
+  "validation_selection_score": -0.2037189614733501,
+  "valid": {
+    "cumulative_return": -0.09983850000007466,
+    "max_drawdown": -0.10388046147327545,
+    "final_equity": 90016.14999999253,
+    "fees": 12016.520000021763,
+    "fills": 243350
+  },
+  "test": {
+    "cumulative_return": -0.1043283500000427,
+    "max_drawdown": -0.10586459566675344,
+    "final_equity": 89567.16499999573,
+    "fees": 9366.360000014676,
+    "fills": 189720
+  }
+}

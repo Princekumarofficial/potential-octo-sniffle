@@ -12,13 +12,14 @@ from torch import nn
 from data import prepare
 from environment import TradingEnv
 from markets import MARKETS
+from risk_actions import ACTION_COUNT, ACTION_RISK
 
 
 class Policy(nn.Module):
-    def __init__(self, inputs):
+    def __init__(self, inputs, actions=3):
         super().__init__()
         self.body = nn.Sequential(nn.Linear(inputs, 64), nn.Tanh(), nn.Linear(64, 64), nn.Tanh())
-        self.actor, self.critic = nn.Linear(64, 3), nn.Linear(64, 1)
+        self.actor, self.critic = nn.Linear(64, actions), nn.Linear(64, 1)
 
     def forward(self, obs, mask):
         hidden = self.body(torch.as_tensor(obs, dtype=torch.float32))
@@ -59,10 +60,10 @@ def main():
     times, prices, features, names = prepare(args.data_dir, args.results, args.stocks, market=args.market, source_timezone=args.source_timezone)
     a, b = pd.Timestamp(args.train_end), pd.Timestamp(args.valid_end)
     selections = {'train': times < a, 'valid': (times >= a) & (times < b), 'test': times >= b}
-    envs = {name: TradingEnv(times[mask], prices[mask], features[mask], args.capital, args.allocation, market=args.market)
+    envs = {name: TradingEnv(times[mask], prices[mask], features[mask], args.capital, args.allocation, market=args.market, risk_actions=True)
             for name, mask in selections.items()}
     args.output.mkdir(parents=True, exist_ok=True)
-    model = Policy(features.shape[-1] + 4)
+    model = Policy(features.shape[-1] + 7, ACTION_COUNT)
     optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
     best, history = -np.inf, []
     # Online one-step advantage actor critic. Rewards are portfolio log returns.
@@ -88,7 +89,7 @@ def main():
         print(f'Epoch {epoch+1}: validation return {score:.4%}', flush=True)
         if score > best:
             best = score
-            torch.save({'state_dict': model.state_dict(), 'inputs': features.shape[-1]+4,
+            torch.save({'state_dict': model.state_dict(), 'inputs': features.shape[-1]+7, 'actions': ACTION_COUNT, 'action_risk': ACTION_RISK,
                         'stocks': args.stocks, 'strategy_features': names, 'market': args.market, 'currency': MARKETS[args.market]['currency']}, args.output / 'policy.pt')
     checkpoint = torch.load(args.output / 'policy.pt', weights_only=True)
     model.load_state_dict(checkpoint['state_dict'])

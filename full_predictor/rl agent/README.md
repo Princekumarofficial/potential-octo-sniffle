@@ -120,3 +120,182 @@ This script is US-only. It stores the aligned arrays, coverage, configuration,
 best model, epoch metrics, held-out equity/trades/stock activity and a plot.
 Stock activity is not a ranking of profitability. Report provenance and
 historical survivorship remain properties of the supplied universe.
+
+
+## Agent-selected TP and SL
+
+Both trainers now learn an 11-action categorical policy: HOLD, SELL, and nine
+BUY variants. Each BUY variant selects SL from 0.5%, 0.75%, 1% and reward/risk
+from 1, 2, 3; TP equals SL times that ratio. Edit `risk_actions.py` to change
+the values while preserving the action mapping. These are RL decisions per
+entry, distinct from the saved GA/GP risk settings used to generate inputs.
+
+Brackets are fixed from the actual entry fill. Observations now also contain
+unrealized entry-relative return and active SL/TP fractions (16 total inputs
+with the default signals). HOLD keeps the bracket. SELL remains available
+and exits at the next available eligible open, without waiting for TP/SL.
+The agent cannot widen or move a bracket on an open trade in this version.
+
+Existing brackets are checked at observed opens, then at observed closes.
+A gap crossing exits at the open, and a close crossing exits at the close,
+with ordinary sell charges. There is no high/low touch simulation and no
+claim of an exact stop-price fill. Missing bars defer risk checks. A bracket
+exit at the open takes priority over an agent SELL. Session liquidation is
+still enforced. A BUY request does not reopen an open-triggered stopped
+position in the same bar.
+
+Trade CSVs preserve entry price, SL, TP and the exit reason: `agent`,
+`stop_loss`, `take_profit`, or `session_end`. All-stock entry prioritization
+uses the sum of probabilities of all BUY variants. Position masks prohibit
+BUY variants while invested. Both actor losses train the selected joint
+BUY-and-bracket action, so risk choices receive the portfolio reward.
+
+Retraining is required: previous 3-action/13-input checkpoints cannot be
+loaded into this new 11-action/16-input model. Saved checkpoints include the
+action count and mapping. Use the same training command with a new output
+folder. No new full training run was performed as part of this change.
+
+
+## Post hoc explanations
+
+Run from `full_predictor` after an all-stock training run:
+
+```powershell
+python "rl agent/analyze.py" --run reports/rl_us_all_run2 --split test --max-explanations 1000
+```
+
+This is a read-only model replay, not further training. It supports old
+three-action and new TP/SL checkpoints. `prepared.npz` is preferred; if
+missing, inputs are reconstructed from the recorded configuration. The tool
+checks replay equity and fill count against the original summary. A mismatch
+is flagged and explanations must not be treated as an exact original replay.
+
+Outputs go into `analysis_test` (or `analysis_valid`):
+- `decisions.jsonl`: observation values, action probabilities, masks, BUY
+  priority, strategy-signal removal response, and execution reasons.
+- `fills.csv`: fill timestamp, preceding policy decision and actual exit reason.
+- `feature_effects.csv`: local probability gradients and single-feature
+  zero-reference perturbations.
+- `feature_summary.csv`: average absolute probability changes for explained
+  decisions; the sample is chronological and capped, not globally representative.
+- `summary.json` and an interpretation README.
+
+Every trade and non-HOLD request is recorded; HOLD observations are sampled
+at `--hold-stride` intervals (default 1000). The explanation cap limits costly
+perturbations but does not truncate replay. Use `--output` for another analysis
+folder; existing nonempty folders are protected. These diagnostics explain
+model sensitivity, not economic causation or calibrated profit probabilities.
+Zero-reference account states can be unrealistic. A forced stop or session
+exit must not be interpreted as an agent-chosen SELL. Analysis currently targets
+`train_all.py` artifacts; the single-stock trainer does not save the same schema.
+
+
+## Current global portfolio architecture
+
+`train_all.py` now uses `PortfolioPolicy` (`portfolio_policy.py`), architecture
+ID `portfolio_joint_v1`. This supersedes the shared independent-stock network
+for new all-stock runs. One full [N,16] observation is flattened into one
+N*16 input. Two 256-unit Tanh layers produce N*3 trade logits, N*9 conditional
+risk logits, and one portfolio value. Each stock's outputs can depend on
+every stock's inputs. Stock order and universe size are fixed by the saved
+checkpoint. The original `train.py` remains a legacy trainer.
+
+Trade choices are HOLD, BUY, SELL. Only BUY uses the conditional nine-way
+SL/TP choice. Training uses a factored joint categorical distribution:
+P(BUY, bracket)=P(BUY)*P(bracket|BUY). Deterministic evaluation first selects
+the trade using total BUY probability, then the bracket. Thus nine BUY
+variants no longer split BUY's vote against one HOLD category. This fixes a
+structural evaluation bias; it does not guarantee profitable trading or
+eliminate legitimate cash-only behavior.
+
+Training logs now include training fills and return separately from validation.
+New checkpoints require retraining; existing independent-stock checkpoints
+remain supported by the analyzer. Post-hoc per-stock perturbations retain
+all other stock observations, so the global context is preserved. The local
+feature summary still explains the selected stock's features only, not all
+cross-stock interactions. Reward, allocation, session and drawdown constraints
+are unchanged. Earlier performance figures do not apply to this architecture.
+
+Use the same all-stock command with a fresh output folder, for example
+`--output reports/rl_us_joint_tp_sl_run1`. No full retraining was performed
+as part of the architecture change.
+
+
+## Select either model from the command line
+
+Both models are retained in `train_all.py`; no source edits are needed:
+
+| Flag | Network | Observation/action schema | RL brackets |
+| --- | --- | --- | --- |
+| `--model classic` | Shared per-stock 64/64 network; average stock critic | 13 inputs per stock, HOLD/BUY/SELL | Disabled |
+| `--model joint` | Global flattened stock input; 256/256 network and portfolio critic | 16 inputs per stock, trade + conditional bracket | Enabled |
+
+`joint` remains the default to preserve existing commands. Both operate on
+all available stocks and use the same portfolio accounting, rollout schedule,
+fee model, allocation, position cap and drawdown objective. Classic is the
+architecture used by the earlier approximately 4% experiment; retraining it
+does not guarantee that return. Upstream GA/GP signals still retain their
+saved risk settings even when classic's own RL brackets are disabled.
+
+From `full_predictor`:
+
+```powershell
+python "rl agent/train_all.py" --model classic --data-dir datasets/processed_datasets/us_stocks --results reports/batch_us_stocks_5x/monthly_results.csv --output reports/rl_us_classic_run1 --epochs 5 --device cuda
+python "rl agent/train_all.py" --model joint --data-dir datasets/processed_datasets/us_stocks --results reports/batch_us_stocks_5x/monthly_results.csv --output reports/rl_us_joint_run2 --epochs 5 --device cuda
+```
+
+These commands inherit USD 100,000 capital, 4% allocation, 10 positions,
+drawdown penalty 1, December 2025 start, June 2026 train end, and September
+2026 validation end. Other existing flags override these defaults.
+
+```powershell
+python "rl agent/analyze.py" --run reports/rl_us_classic_run1 --split test
+python "rl agent/analyze.py" --run reports/rl_us_joint_run2 --split test
+```
+
+Configuration, checkpoint and summary record the selected model. Analysis
+automatically detects the architecture and action schema from the checkpoint;
+no model flag is needed. Old checkpoints without a model field remain
+supported. Output directories must be new/empty to preserve previous runs.
+
+
+## Classic model with temporal LSTM inputs
+
+Add `--model classic --use-lstm`; optionally set `--lookback 30`. This flag
+is rejected for joint mode. Without it, existing classic and joint modes
+are unchanged. The saved architecture is `classic_lstm_v1`.
+
+```powershell
+python "rl agent/train_all.py" --model classic --use-lstm --lookback 30 --data-dir datasets/processed_datasets/us_stocks --results reports/batch_us_stocks_5x/monthly_results.csv --output reports/rl_us_classic_lstm_run1 --epochs 5 --device cuda --capital 100000 --allocation 0.04 --max-positions 10 --drawdown-penalty 1 --start 2025-12-01 --train-end 2026-06-01 --valid-end 2026-09-01
+python "rl agent/analyze.py" --run reports/rl_us_classic_lstm_run1 --split test --max-explanations 1000
+```
+
+One shared single-layer 64-hidden-unit LSTM processes each stock's sequence,
+followed by three-action actor and scalar critic heads. The stock critic
+outputs are averaged into a portfolio value. There is no joint cross-stock
+layer in this classic mode. Actions remain HOLD, BUY and SELL, with no
+RL-generated TP/SL. Fees, allocation and the drawdown objective are unchanged.
+
+The LSTM receives the classic 13 observation features plus availability and
+log(1 + elapsed minutes since previous aligned timestamp), for 15 features
+per timestep. Rollout observations have shape [batch, stocks, lookback, 15].
+Past account observations are stored as they actually occurred, never
+reconstructed using the current account state. Missing-stock bars retain
+the existing zero-feature/valuation behavior with explicit availability.
+History uses aligned timestamps, not a fixed number of actual bars per stock.
+
+Windows end at the decision timestamp. They are left-zero-padded at session
+start and reset at every new calendar session and at each split/episode.
+There is no carry of recurrent hidden state beyond the explicit window;
+each forward pass starts from zero state. Windows persist across rollout
+boundaries within the same session. All lookback steps participate in the
+training gradient. The current implementation still collects actions on CPU
+and moves rollout batches to CUDA for learning. Longer windows increase CPU
+inference time, memory use and training cost; GPU does not accelerate every
+stage. No performance improvement is assumed without fresh evaluation.
+
+Checkpoints save the architecture, input count and lookback; analysis loads
+these automatically. LSTM post-hoc explanations vary only the latest input
+values while holding the preceding sequence fixed. They do not attribute
+importance to every lag or remove strategy signals throughout the full
+history. Old checkpoints remain usable in their original model modes.

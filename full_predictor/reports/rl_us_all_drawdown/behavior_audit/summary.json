@@ -1,0 +1,85 @@
+{
+  "zero_signals": {
+    "cumulative_return": 0.07162729999999895,
+    "max_drawdown": -0.022389374954826957,
+    "final_equity": 107162.7299999999,
+    "fees": 58.42,
+    "fills": 1040,
+    "total_entries": 520,
+    "entry_overlap_with_replayed_policy": 132
+  },
+  "zero_prices": {
+    "cumulative_return": 0.013903599999999017,
+    "max_drawdown": -0.017223436755734012,
+    "final_equity": 101390.3599999999,
+    "fees": 56.410000000000004,
+    "fills": 1040,
+    "total_entries": 520,
+    "entry_overlap_with_replayed_policy": 383
+  },
+  "random_0": {
+    "cumulative_return": 0.016776549999999224,
+    "max_drawdown": -0.019120942251177442,
+    "final_equity": 101677.65499999991,
+    "fees": 57.69,
+    "fills": 1040,
+    "total_entries": 520,
+    "entry_overlap_with_replayed_policy": 72
+  },
+  "random_1": {
+    "cumulative_return": 0.014309049999998047,
+    "max_drawdown": -0.015735835122182795,
+    "final_equity": 101430.90499999981,
+    "fees": 57.55,
+    "fills": 1040,
+    "total_entries": 520,
+    "entry_overlap_with_replayed_policy": 76
+  },
+  "random_2": {
+    "cumulative_return": 0.001967200000001279,
+    "max_drawdown": -0.01972794246185261,
+    "final_equity": 100196.72000000012,
+    "fees": 56.51,
+    "fills": 1040,
+    "total_entries": 520,
+    "entry_overlap_with_replayed_policy": 94
+  },
+  "random_3": {
+    "cumulative_return": -0.005284650000001445,
+    "max_drawdown": -0.024846831186951412,
+    "final_equity": 99471.53499999986,
+    "fees": 57.18,
+    "fills": 1040,
+    "total_entries": 520,
+    "entry_overlap_with_replayed_policy": 68
+  },
+  "random_4": {
+    "cumulative_return": -0.008336799999999922,
+    "max_drawdown": -0.025326549535435894,
+    "final_equity": 99166.32,
+    "fees": 57.1,
+    "fills": 1040,
+    "total_entries": 520,
+    "entry_overlap_with_replayed_policy": 82
+  },
+  "replayed_policy": {
+    "cumulative_return": 0.037435649999998155,
+    "max_drawdown": -0.015593159113504118,
+    "final_equity": 103743.56499999981,
+    "fees": 56.84,
+    "fills": 1040,
+    "matches_original": false,
+    "total_entries": 520,
+    "entry_overlap_with_replayed_policy": 520
+  },
+  "audit_metadata": {
+    "checkpoint_run": "rl_us_all_drawdown",
+    "prepared_cache_run": "rl_us_all_run2",
+    "exact_reproduction": false,
+    "saved_test_return": 0.040163499999999575,
+    "saved_final_equity": 104016.34999999995,
+    "reconstructed_entry_overlap_with_saved": 450,
+    "saved_entries": 520,
+    "interpretation": "Ablations and random baselines use the later cache and current simulator. They are diagnostic comparisons against the 3.74% replay, not exact counterfactuals of the original 4.02% run. Test data has been inspected; no tuning or model updates were performed."
+  }
+}

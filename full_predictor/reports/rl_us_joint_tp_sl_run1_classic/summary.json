@@ -1,0 +1,22 @@
+{
+  "model": "classic",
+  "architecture": "shared_stock_v1",
+  "device": "cuda",
+  "stocks": 95,
+  "cash_baseline_return": 0.0,
+  "validation_selection_score": 0.0,
+  "valid": {
+    "cumulative_return": 0.0,
+    "max_drawdown": 0.0,
+    "final_equity": 100000.0,
+    "fees": 0,
+    "fills": 0
+  },
+  "test": {
+    "cumulative_return": 0.0,
+    "max_drawdown": 0.0,
+    "final_equity": 100000.0,
+    "fees": 0,
+    "fills": 0
+  }
+}
