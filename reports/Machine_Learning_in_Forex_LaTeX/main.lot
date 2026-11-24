@@ -1,0 +1,22 @@
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {3.1}{\ignorespaces USD/INR forecasting errors and directional accuracy}}{5}{}%
+\contentsline {table}{\numberline {3.2}{\ignorespaces Daily LSTM test results}}{7}{}%
+\contentsline {table}{\numberline {3.3}{\ignorespaces Cross-asset daily strategy performance}}{8}{}%
+\contentsline {table}{\numberline {3.4}{\ignorespaces EUR/USD strategy and passive benchmark}}{10}{}%
+\contentsline {table}{\numberline {3.5}{\ignorespaces EUR/USD validation and test configurations}}{11}{}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {4.1}{\ignorespaces Intraday equity feature families}}{14}{}%
+\contentsline {table}{\numberline {4.2}{\ignorespaces Threshold and Q-policy trades}}{16}{}%
+\contentsline {table}{\numberline {4.3}{\ignorespaces Equity strategy search parameters}}{17}{}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {5.1}{\ignorespaces Indian shared-capital portfolios}}{19}{}%
+\contentsline {table}{\numberline {5.2}{\ignorespaces US shared-capital portfolios}}{20}{}%
+\contentsline {table}{\numberline {5.3}{\ignorespaces Transaction charges in the top-ten portfolios}}{23}{}%
+\contentsline {table}{\numberline {5.4}{\ignorespaces Drawdown-aware policy performance}}{25}{}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {B.1}{\ignorespaces Summary of foundational literature in ML for Forex and trading (Part 1: Studies 1--4)}}{34}{}%
+\contentsline {table}{\numberline {B.2}{\ignorespaces Summary of foundational literature in ML for Forex and trading (Part 2: Studies 5--8)}}{35}{}%

@@ -1,0 +1,33 @@
+\contentsline {chapter}{Candidate's Declaration}{i}{}%
+\contentsline {chapter}{Supervisor's Certificate}{i}{}%
+\contentsline {chapter}{Preface}{ii}{}%
+\contentsline {chapter}{Acknowledgements}{iii}{}%
+\contentsline {chapter}{Abstract}{iv}{}%
+\contentsline {chapter}{List of Figures}{vii}{}%
+\contentsline {chapter}{List of Tables}{viii}{}%
+\contentsline {chapter}{\numberline {1}Introduction}{1}{}%
+\contentsline {chapter}{\numberline {2}Literature Review and Research Gaps}{2}{}%
+\contentsline {chapter}{\numberline {3}Forex Forecasting and Trading Experiments}{4}{}%
+\contentsline {section}{\numberline {3.1}Forex data and forecasting baselines}{4}{}%
+\contentsline {subsection}{\numberline {3.1.1}Building a daily return forecast}{5}{}%
+\contentsline {section}{\numberline {3.2}Daily LSTM Directional Forecasting}{6}{}%
+\contentsline {subsection}{\numberline {3.2.1}How BigMoveAwareLoss weights forecast errors}{8}{}%
+\contentsline {section}{\numberline {3.3}EUR/USD execution and the passive benchmark}{9}{}%
+\contentsline {subsection}{\numberline {3.3.1}Calibrating stops, targets and position size}{10}{}%
+\contentsline {chapter}{\numberline {4}Intraday Equity Data and Trading Methods}{13}{}%
+\contentsline {section}{\numberline {4.1}Auditing the one-minute equity data}{13}{}%
+\contentsline {section}{\numberline {4.2}Feature construction and indicator screening}{14}{}%
+\contentsline {section}{\numberline {4.3}Trading the intraday LSTM forecasts}{15}{}%
+\contentsline {section}{\numberline {4.4}Parameter search and genetic programming}{17}{}%
+\contentsline {chapter}{\numberline {5}Results and Discussion}{19}{}%
+\contentsline {section}{\numberline {5.1}Indian equity portfolio}{19}{}%
+\contentsline {section}{\numberline {5.2}US equity portfolio}{20}{}%
+\contentsline {subsection}{\numberline {5.2.1}Shared portfolios versus buy-and-hold}{22}{}%
+\contentsline {subsection}{\numberline {5.2.2}Trading charges in the Indian and US top-10 portfolios}{23}{}%
+\contentsline {section}{\numberline {5.3}Reinforcement learning over strategy signals}{24}{}%
+\contentsline {chapter}{\numberline {6}Conclusions and Scope for Future Work}{27}{}%
+\contentsline {section}{\numberline {6.1}Conclusions}{27}{}%
+\contentsline {section}{\numberline {6.2}Scope for Future Work}{28}{}%
+\contentsline {chapter}{\numberline {A}Research Workflow and System Architecture}{30}{}%
+\contentsline {chapter}{\numberline {B}Comprehensive Literature Review}{33}{}%
+\contentsline {chapter}{References}{36}{}%
