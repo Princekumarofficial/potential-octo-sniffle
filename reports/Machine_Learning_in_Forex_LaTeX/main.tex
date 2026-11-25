@@ -129,6 +129,8 @@ This distinction motivated the shift from predicting a price level to learning d
 A model can track the level of an exchange rate closely while getting tomorrow's direction wrong. The base USD/INR MLP had a test RMSE of 1.9150 rupees per dollar. With technical and temporal inputs, RMSE fell to 0.2395, while directional accuracy reached 52.30\%. The eligible test windows differed slightly across models.\par
 \subsection*{What one training example contains}
 At forecast time the model reads ten consecutive observations. Each row contains 23 features. A single LSTM layer with 32 hidden units summarizes the window, and a linear output maps the last hidden state to one predicted log return. A positive next-day log return means the quoted pair closed higher.\par
+
+\textbf{Adding commodity prices.} In an exploratory run, we added gold prices, crude oil prices and World Bank Pink Sheet commodity data to the forex inputs. The model tended to predict next-day currency returns close to 0\%, forecasting little change in the exchange rate.\par
 \textbf{5 market inputs.} The target exchange rate, two other currency quotes, the federal funds rate and the US ten-year yield give the model cross-market context.\par
 \textbf{10 trend inputs.} Simple and exponential moving averages at 5, 10, 30, 50 and 100 days describe trends over different horizons.\par
 \textbf{8 momentum and risk inputs.} RSI, the current log return, three Bollinger-band values, rolling volatility and two range proxies describe recent moves and their variability.\par

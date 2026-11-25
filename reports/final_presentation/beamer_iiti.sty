@@ -1,0 +1,129 @@
+% Miniframe-Navigation aktivieren
+\useoutertheme{miniframes}
+
+% Professional Helvetica/TeX Gyre Heros Typography
+\usepackage{tgheros}
+\renewcommand{\familydefault}{\sfdefault}
+\usefonttheme{professionalfonts}
+
+% mathematische Formeln mit Serifen setzen 
+\usefonttheme[onlymath]{serif}
+
+% IIT Indore Branding Colors
+\definecolor{iitiblue}{RGB}{0,33,71}      % Deep Navy Blue
+\definecolor{iitigold}{RGB}{212,175,55}    % Gold Accent
+\definecolor{iiticyan}{RGB}{0,102,153}     % Cyan Accent
+\definecolor{iitilightbg}{RGB}{245,247,250}% Light Gray Background for Blocks
+
+\setbeamercolor{titlelike}{fg=iitiblue}
+\setbeamercolor{title page}{bg=white}
+\setbeamertemplate{navigation symbols}{}
+
+\setbeamercolor{title}{fg=iitiblue}
+\setbeamercolor{subtitle}{fg=iiticyan}
+\setbeamercolor{author}{fg=iitiblue}
+\setbeamercolor{institute}{fg=black}
+\setbeamercolor{date}{fg=black}
+\setbeamercolor{frametitle}{fg=iitiblue,bg=white}
+\setbeamercolor{itemize item}{fg=iitiblue}
+\setbeamercolor{itemize subitem}{fg=iiticyan}
+\setbeamercolor{itemize subsubitem}{fg=iitigold}
+\setbeamercolor{block title}{fg=white,bg=iitiblue}
+\setbeamercolor{block body}{fg=black,bg=iitilightbg}
+\setbeamercolor{block title example}{fg=white,bg=iiticyan}
+\setbeamercolor{block body example}{fg=black,bg=iitilightbg}
+\setbeamercolor{mini frame}{fg=iitiblue}
+\setbeamercolor{section in head/foot}{fg=iitiblue}
+\setbeamercolor{section in toc shaded}{fg=iitiblue!60}
+\setbeamercolor{section in toc}{fg=iitiblue}
+\setbeamercolor{subsection in toc shaded}{fg=iitiblue!60}
+\setbeamercolor{subsection in toc}{fg=iitiblue}
+
+\setbeamerfont{title page}{family=\sffamily}
+\setbeamerfont{title}{size=\Large,series=\bfseries}
+\setbeamerfont{subtitle}{size=\small,series=\mdseries}
+\setbeamerfont{author}{size=\small}
+\setbeamerfont{institute}{size=\footnotesize}
+\setbeamerfont{date}{size=\footnotesize}
+
+\setbeamertemplate{title page}
+{%
+	\vskip10pt
+	\centering
+	\includegraphics[height=1.5cm]{IITI_Logo.png}\par
+	\vspace*{1.5ex}
+	{\usebeamerfont{title}\usebeamercolor[fg]{title}\inserttitle\par}
+	\ifx\insertsubtitle\@empty\else
+		\vspace*{0.5ex}
+		{\usebeamerfont{subtitle}\usebeamercolor[fg]{subtitle}\insertsubtitle\par}
+	\fi
+	\vspace*{1ex}
+	\textcolor{iitigold}{\hrule height 2pt}
+	\vspace*{1.5ex}
+	{\usebeamerfont{author}\insertauthor\par}
+	\vspace*{1ex}
+	{\usebeamerfont{institute}\insertinstitute\par}
+	\vspace*{1ex}
+	{\usebeamerfont{date}\insertdate\par}
+	\usebeamercolor[fg]{titlegraphic}\inserttitlegraphic
+}
+
+\newenvironment{withoutheadline}{%
+	\setbeamercolor{background canvas}{bg=white}
+	\setbeamertemplate{headline}{}
+	\setbeamertemplate{footline}{}
+}{}
+
+\setbeamertemplate{headline}
+{\begin{minipage}[c][0.9cm]{\paperwidth}
+		\begin{minipage}{3cm}
+			~\includegraphics[height=0.8cm]{IITI_Logo.png}
+		\end{minipage}
+		\begin{minipage}{13cm}
+			\insertnavigation{0.75\paperwidth}
+			\vskip4pt
+		\end{minipage}
+	\end{minipage}
+	\color{iitiblue}\rule{\paperwidth}{1.5pt} 
+}
+
+\setbeamertemplate{footline}{%
+\colorbox{iitiblue}{\begin{minipage}[c][0.45cm]{\textwidth}%	
+	\hspace*{0.5cm}\color{white}{\insertshorttitle}
+	\hfill\color{white}{\tiny Department of Physics, IIT Indore \quad|\quad Slide \insertframenumber/\inserttotalframenumber}\hspace*{0.5cm}
+\end{minipage}\hspace{-6pt}}
+}
+
+\AtBeginSection[]
+{
+	\begin{withoutheadline}
+		\miniframesoff
+		\begin{frame}
+			\begin{center}
+				\usebeamercolor[fg]{block title}\LARGE{\color{iitiblue}\bfseries \insertsection}
+			\end{center}
+		\end{frame}
+		\miniframeson
+	\end{withoutheadline}
+}
+
+%\AtBeginSubsection[]
+%{
+%	\begin{withoutheadline}
+%		\miniframesoff
+%			\begin{frame}<beamer>
+%				\frametitle{Outline Overview}
+%				\tableofcontents[sectionstyle=show/hide,subsectionstyle=show/shaded/hide,subsubsectionstyle=show/show/shaded/hide]
+%			\end{frame}
+%		\miniframeson
+%	\end{withoutheadline}
+%}
+
+% Diagram styling
+\mode<beamer>{
+	\pgfplotsset{
+		beamer/.append style={
+			height=0.38\textwidth,
+		}
+	}
+}
