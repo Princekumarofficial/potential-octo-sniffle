@@ -1,0 +1,22 @@
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {3.1}{\ignorespaces Saved evaluation plot for three technical-feature models}}{5}{}%
+\contentsline {figure}{\numberline {3.2}{\ignorespaces Currency forecasts and the always-up rule on the same test observations}}{8}{}%
+\contentsline {figure}{\numberline {3.3}{\ignorespaces Training and validation loss from the NIFTY 50 LSTM run}}{8}{}%
+\contentsline {figure}{\numberline {3.4}{\ignorespaces Equity from the trade ledger and the passive euro holding reconstructed from the same daily returns}}{11}{}%
+\contentsline {figure}{\numberline {3.5}{\ignorespaces Validation fitness during the genetic search}}{12}{}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {4.1}{\ignorespaces Seven stocks with the most missing minutes in the Indian run-level audit}}{15}{}%
+\contentsline {figure}{\numberline {4.2}{\ignorespaces Prediction skill relative to the persistence baseline (predicting no change, shown as 0\%)}}{17}{}%
+\contentsline {figure}{\numberline {4.3}{\ignorespaces Cumulative net P\&L from the matched LTIM and RELIANCE logs}}{18}{}%
+\contentsline {figure}{\numberline {4.4}{\ignorespaces Saved ABB walk-forward comparison from the Calmar experiment}}{19}{}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {5.1}{\ignorespaces Shared-capital Indian top-10 replay}}{21}{}%
+\contentsline {figure}{\numberline {5.2}{\ignorespaces US top-20 replay}}{22}{}%
+\contentsline {figure}{\numberline {5.3}{\ignorespaces Monthly US portfolio eligibility and activity}}{23}{}%
+\contentsline {figure}{\numberline {5.4}{\ignorespaces Saved validation and test equity curves}}{27}{}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {A.1}{\ignorespaces End-to-end research workflow and system architecture comparing the Forex predictive pipeline (Track A) and the high-frequency equities and portfolio reinforcement learning pipeline (Track B).}}{32}{}%
+\addvspace {10\p@ }

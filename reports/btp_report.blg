@@ -1,0 +1,61 @@
+This is BibTeX, Version 0.99e
+Capacity: max_strings=200000, hash_size=200000, hash_prime=170003
+The top-level auxiliary file: btp_report.aux
+Reallocating 'name_of_file' (item size: 1) to 7 items.
+The style file: ieeetr.bst
+Reallocating 'name_of_file' (item size: 1) to 13 items.
+Database file #1: document.bib
+Warning--empty author in forexTrend2011
+Warning--empty journal in forexTrend2011
+Warning--empty author in deepTechnicalAnalysis2021
+Warning--empty journal in deepTechnicalAnalysis2021
+Warning--empty author in financialTradingGame2018
+Warning--empty journal in financialTradingGame2018
+Warning--empty author in macroQuant2025
+Warning--empty journal in macroQuant2025
+Warning--empty author in deepLstmRl2019
+Warning--empty journal in deepLstmRl2019
+Warning--empty author in algoMl2022
+Warning--empty journal in algoMl2022
+You've used 6 entries,
+            1876 wiz_defined-function locations,
+            501 strings with 4249 characters,
+and the built_in function-call counts, 712 in all, are:
+= -- 54
+> -- 6
+< -- 0
++ -- 6
+- -- 0
+* -- 56
+:= -- 89
+add.period$ -- 6
+call.type$ -- 6
+change.case$ -- 6
+chr.to.int$ -- 0
+cite$ -- 18
+duplicate$ -- 54
+empty$ -- 103
+format.name$ -- 0
+if$ -- 169
+int.to.chr$ -- 0
+int.to.str$ -- 6
+missing$ -- 6
+newline$ -- 21
+num.names$ -- 0
+pop$ -- 42
+preamble$ -- 1
+purify$ -- 0
+quote$ -- 0
+skip$ -- 6
+stack$ -- 0
+substring$ -- 0
+swap$ -- 0
+text.length$ -- 0
+text.prefix$ -- 0
+top$ -- 0
+type$ -- 0
+warning$ -- 12
+while$ -- 0
+width$ -- 7
+write$ -- 38
+(There were 12 warnings)

@@ -1,0 +1,13 @@
+{
+  "split": "test",
+  "final_equity": 100000.0,
+  "fills": 0,
+  "replay_matches_original": true,
+  "decisions_recorded": 1880,
+  "decisions_explained": 100,
+  "action_counts": {
+    "HOLD": 1926505,
+    "BUY": 0,
+    "SELL": 0
+  }
+}

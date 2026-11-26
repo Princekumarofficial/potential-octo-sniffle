@@ -1,0 +1,31 @@
+{
+  "initial_capital": 100000.0,
+  "final_equity": 112499.25000000132,
+  "cumulative_return": 0.12499250000001316,
+  "daily_max_drawdown": -0.012031402028296223,
+  "fees": 2223.42,
+  "fills": 13764,
+  "overnight_stock_days": 1,
+  "allocation": 0.1,
+  "leverage": 5.0,
+  "allocation_mode": "notional",
+  "leverage_by_stock": {},
+  "margin_events": 0,
+  "ranking_months": 3,
+  "top": 20,
+  "start": "2025-05-01 00:00:00",
+  "end": "2026-11-12 00:00:00",
+  "fee_model": "US Regulated Equities ($0 Commission, SEC Section 31 + FINRA TAF)",
+  "rounding": "Per-component per-order paise estimates",
+  "charge_breakdown": {
+    "brokerage": 40.0,
+    "stt": 21.740000000000002,
+    "exchange": 0.66,
+    "sebi": 2055.0200000000004,
+    "ipft": 82.30000000000001,
+    "stamp": 1.63,
+    "gst": 9.57,
+    "admin": 0.0,
+    "dp": 12.5
+  }
+}

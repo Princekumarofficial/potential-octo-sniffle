@@ -1,0 +1,800 @@
+% !TeX program = xelatex
+\documentclass[12pt,a4paper,twoside,openany]{report}
+\usepackage{fontspec}
+\setmainfont{Times New Roman}
+\usepackage[inner=32mm,outer=23mm,top=25mm,bottom=25mm]{geometry}
+\usepackage{graphicx,tabularx,booktabs,array,enumitem,xcolor,setspace,amsmath,amssymb}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric,arrows.meta,positioning,calc,fit}
+\onehalfspacing
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5pt}
+\setlength{\emergencystretch}{2em}
+\setlist[itemize]{leftmargin=*,itemsep=2pt}
+\raggedbottom
+\setcounter{tocdepth}{2}
+\newcommand{\projecttitle}{Machine Learning for Financial Market Forecasting and Algorithmic Trading}
+\newcommand{\student}{Prince Kumar}
+\newcommand{\guides}{Prof. Raghunath Sahoo and Dr. Kalindi C. Pradhan}
+\newcommand{\logoIITI}{\includegraphics[height=34mm]{figures/1-IITI_Logo.png}}
+\newcommand{\frontchapter}[1]{\chapter*{#1}\addcontentsline{toc}{chapter}{#1}}
+\newcommand{\studentblock}{\par\vfill\begin{flushright}\student\\B.Tech. IV Year, Engineering Physics\\IIT Indore\end{flushright}}
+\begin{document}
+\begin{titlepage}
+\pagecolor[HTML]{10274B}\color[HTML]{F0C869}
+\centering\singlespacing\bfseries
+\vspace*{10mm}
+{\fontsize{36}{40}\selectfont \makebox[\linewidth][c]{B. TECH. PROJECT REPORT}\par}
+\medskip{\fontsize{20}{24}\selectfont On\par}
+\medskip{\fontsize{36}{42}\selectfont \projecttitle\par}
+\vfill
+{\fontsize{16}{20}\selectfont BY\par}
+{\fontsize{14}{18}\selectfont \student\par}
+\vfill\logoIITI\par\vfill
+{\fontsize{16}{20}\selectfont DISCIPLINE OF ENGINEERING PHYSICS\par}
+{\fontsize{18}{22}\selectfont INDIAN INSTITUTE OF TECHNOLOGY INDORE\par}
+{\fontsize{16}{20}\selectfont November 2026\par}
+\end{titlepage}
+\nopagecolor
+\begin{titlepage}
+\centering\singlespacing
+{\Huge\bfseries \projecttitle\par}\vfill
+{\Large\bfseries A PROJECT REPORT\par}\bigskip
+Submitted in partial fulfillment of the requirements for the award of the degree of\par
+\medskip{\large\bfseries BACHELOR OF TECHNOLOGY\par}
+in\par{\large\bfseries ENGINEERING PHYSICS\par}\vfill
+Submitted by\par{\large\bfseries \student\par}Roll No. 230051013\par
+\bigskip Guided by\par{\large\bfseries \guides\par}
+\vfill\logoIITI\par\vfill
+{\large\bfseries INDIAN INSTITUTE OF TECHNOLOGY INDORE\par}November 2026
+\end{titlepage}
+\pagenumbering{roman}
+\frontchapter{Candidate's Declaration}
+I hereby declare that the project entitled \emph{\projecttitle}, submitted in partial fulfillment of the requirements for the award of the degree of Bachelor of Technology in Engineering Physics, is my authentic work completed under the supervision of \guides, IIT Indore. I further declare that I have not submitted this work for the award of any other degree elsewhere.
+\vspace{12mm}\par\rule{64mm}{0.4pt}\hfill Date: \rule{32mm}{0.4pt}\par
+\student, Roll No. 230051013
+\bigskip\hrule
+\section*{Certificate by BTP Guides}
+\addcontentsline{toc}{chapter}{Supervisor's Certificate}
+We certify that the above statement made by the student is correct to the best of our knowledge.
+\vspace{12mm}\par
+\begin{tabularx}{\linewidth}{@{}XX@{}}
+\rule{55mm}{0.4pt} & \rule{55mm}{0.4pt}\\
+Prof. Raghunath Sahoo & Dr. Kalindi C. Pradhan\\
+Designation: \hrulefill & Designation: \hrulefill\\
+Date: \hrulefill & Date: \hrulefill
+\end{tabularx}
+\frontchapter{Preface}
+This report traces how a daily exchange-rate forecast becomes a trading decision. I began by comparing forecasts for USD/INR and EUR/USD, then examined what happened when entry thresholds, stop losses and trading costs were applied. The equity experiments extend that question to a portfolio in which several stocks compete for the same capital.
+\studentblock
+\frontchapter{Acknowledgements}
+I thank my project guides, \guides, for their guidance throughout this B.Tech. project.
+\studentblock
+\frontchapter{Abstract}
+
+How much of a currency forecast survives the decision to trade? This project follows that question from daily exchange-rate models to minute-level execution and a shared portfolio of equities. On 681 held-out observations, the daily LSTM predicted 378 USD/INR directions correctly. Simply predicting up achieved 375. On EUR/USD, validation fine-tuning raised the correct count from 347 to 363. In a separate 65-session EUR/USD simulation, the trading strategy gained 2.28\% while a passive euro holding lost 1.59\% by exact compounding.\par
+The equity extension used 100 Indian and 95 US stock files. It compared a forecast threshold with a learned trading policy, then combined technical strategies and evolved rules in a shared account. The best saved Indian and US portfolio configurations returned 250.87\% and 12.50\% over their respective historical periods. A final policy trained on five strategy signals earned 4.02\% on its 95-stock US test. Different periods, position limits and cost assumptions restrict comparisons across these experiments.\par
+
+\renewcommand{\contentsname}{Table of Contents}
+\tableofcontents
+\clearpage\addcontentsline{toc}{chapter}{List of Figures}\listoffigures
+\clearpage\addcontentsline{toc}{chapter}{List of Tables}\listoftables
+\clearpage
+\frontchapter{List of Appendices}
+\noindent Appendix~\ref{app:architecture}\quad Research Workflow and System Architecture\dotfill\pageref{app:architecture}\par
+\noindent Appendix~\ref{app:lit-review}\quad Comprehensive Literature Review\dotfill\pageref{app:lit-review}\par
+\clearpage\pagenumbering{arabic}
+\chapter{Introduction}
+
+A correct exchange-rate forecast can still lead to a losing trade. The predicted move may be too small to cover trading costs, or the price may hit a stop-loss before moving in the expected direction. This project began with two questions. How accurately can a model predict the next daily movement in USD/INR and EUR/USD? Under what conditions does acting on a forecast improve the outcome for a trader?
+
+I first compared statistical and machine-learning forecasts against simple baselines, including using the latest exchange rate as the next prediction. I evaluated both price error and directional accuracy, then used a historical EUR/USD simulation to examine how entry thresholds, position sizing and exit rules affected returns and drawdown.
+
+I extended the investigation to minute-level Indian and US equity data, where trading decisions also depend on the quality of individual price bars and the capital available across stocks. I tested trading rules with explicit entry conditions and trained a reinforcement-learning policy to act on their signals. The policy rewarded portfolio growth and penalized increases in drawdown. Evaluating it on a later period allowed me to examine how it behaved on prices it had not seen during training.
+
+
+\chapter{Literature Review and Research Gaps}
+Several published studies examine machine learning for currency and financial asset markets~[1--8]. A comprehensive tabular comparison of these foundational works is provided in Appendix~\ref{app:lit-review}.
+\begin{itemize}
+  \item \textbf{Forecasting and trend classification.} Baasher and Fakhr~[3] apply SVM and MLP classifiers to multi-window technical and signal-processing features, introducing the Percentage Normalized Profit (PNP) metric. Fisichella and Garolla~[1] evaluate deep neural and vision transformer models on candlestick images and technical rules, finding that while hybrid ensembles achieve gains, standalone deep networks struggle to learn persistent direction. Kagadal et al.~[4] predict five-day USD/INR direction using XGBoost and first-differenced macroeconomic indicators. On their 2023--2025 test data, XGBoost achieved 60.96\% directional accuracy versus 58.11\% for logistic regression. Their SHAP analysis highlights the US--India yield spread and crude oil prices. Neghab et al.~[8] evaluate multiple linear, tree, and recurrent models with macroeconomic fundamentals on CAD/USD, applying SHAP values to explain feature importance shifts across economic regimes.
+  \item \textbf{Reinforcement learning and adaptive trading.} Huang~[2] formulates FX trading as a game using a Financial Deep Recurrent Q-Network (DRQN) with action augmentation, demonstrating positive returns across 12 currency pairs. Dempster and Leemans~[7] introduce Adaptive Reinforcement Learning (ARL) using a recurrent neural network with a dynamic utility optimization layer to continuously tune risk parameters and transaction hurdles on high-frequency EUR/USD ticks. Rundo~[5] couples a deep LSTM network with a reinforcement learning layer to predict EUR/USD trend continuations alongside correlated pairs (GBP/USD, EUR/GBP), achieving about 85\% accuracy on the three-class trend task after RL correction and direct integration with an intraday trading system. Loh et al.~[6] introduce an ensembling architecture combining deep reinforcement learning agents (DQN, A2C, PPO) with genetic algorithm optimization and fractional differencing ($d=0.8$) to retain long-range memory while satisfying stationarity.
+\end{itemize}
+
+\subsection*{Research gaps addressed by this project}
+\begin{enumerate}[leftmargin=1.5cm, itemsep=2pt]
+  \item \textbf{The forecast-to-trade gap.} Existing literature predominantly reports either predictive metrics (accuracy, RMSE) or isolated backtests. This project tracks identical daily and intraday signals through close-to-close evaluation, granularity-mismatch stop calibration on minute ticks, and a multi-stock shared-capital portfolio layer with statutory exchange tariffs.
+  \item \textbf{Post hoc explainability and macro integration in RL.} While RL models select dynamic actions, few studies explain policy behavior or integrate cross-market macroeconomic differentials under strict drawdown constraints.
+\end{enumerate}
+
+
+\chapter{Forex Forecasting and Trading Experiments}
+\section{Forex data and forecasting baselines}\label{exp:1}
+The initial experiments ask whether yesterday's observations help forecast the next exchange-rate move. USD/INR quotes rupees per dollar; EUR/USD quotes dollars per euro. For each pair, a positive return denotes appreciation of the base currency.\par
+\begin{itemize}\item \textbf{Data and predictors.} The FRED inputs include both target currencies, the yen exchange rate, the federal funds rate and the US ten-year Treasury yield. The training notebook aligns observations by date and drops incomplete rows before constructing chronological splits.\end{itemize}
+\begin{itemize}\item \textbf{Models.} Persistence and a three-day moving average provide training references. The notebook also fits ARIMA, linear models and neural networks. Technical inputs summarize moving averages, momentum and dispersion; temporal features extend the feed-forward model.\end{itemize}
+\begin{itemize}\item \textbf{Evaluation.} Mean absolute error (MAE) and root mean squared error (RMSE) measure price-level error. Directional accuracy asks whether the model got the sign of the move right.\end{itemize}
+\begin{table}[htbp]\centering\singlespacing
+\caption{USD/INR forecasting errors and directional accuracy}
+\begin{tabularx}{\linewidth}{@{}p{0.34\linewidth}XXX@{}}\toprule
+USD/INR test model & MAE & RMSE & Direction\\\midrule
+Base deep MLP & 1.8872 & 1.9150 & 44.93\%\\
+MLP + technical features & 0.1917 & 0.2553 & 52.21\%\\
+MLP + technical and temporal features & 0.1558 & 0.2395 & 52.30\%\\
+\bottomrule\end{tabularx}
+\end{table}
+Directional accuracy and regression errors were scored out-of-sample on the held-out test split across 690, 680 and 675 observations respectively. ARIMA(2, 0, 1) has a separate validation record: MAE 1.1895, RMSE 1.5280 and direction 53.85\% (371/689).\par
+\begin{figure}[htbp]\centering
+\includegraphics[width=\linewidth,height=58mm,keepaspectratio]{figures/3-evaluation-regression-test.png}
+\caption[Saved evaluation plot for three technical-feature models]{Saved evaluation plot for three technical-feature models. Adding temporal features reduced price error. The last two directional scores cover different observation counts.}
+\end{figure}
+This distinction motivated the shift from predicting a price level to learning daily returns. The technical-analysis study of Fisichella and Garolla [1] provided a related formulation for the forex forecasting question.\par
+
+\subsection*{What changed between the early USD/INR models}
+Persistence used today's close as tomorrow's forecast. The moving-average rule used the mean of the latest three closes. On the training split, their respective MAE values were 0.2082 and 0.1813 INR per dollar, and their RMSE values were 0.3596 and 0.3510. These figures describe in-sample fit. The preceding table reports the neural models on their held-out splits.
+
+\begin{itemize}
+\item \textbf{Base and technical MLPs.} The base model mapped five market inputs through hidden layers of 64 and 32 units to a single price forecast. The technical model used the same hidden layers with 23 inputs. Both used ReLU activations.
+\item \textbf{Temporal MLP.} The temporal model used wider hidden layers (128 and 64 units) and applied dropout at 0.2 after the first activation. Its comparison with the technical MLP therefore changes the architecture as well as the inputs.
+\item \textbf{Training.} The early MLP experiments used mean squared error, Adam with a learning rate of $10^{-3}$, batches of 32 and a 100-epoch training schedule.
+\end{itemize}
+
+\subsection{Building a daily return forecast}\label{exp:1.1}
+A model can track the level of an exchange rate closely while getting tomorrow's direction wrong. The base USD/INR MLP had a test RMSE of 1.9150 rupees per dollar. With technical and temporal inputs, RMSE fell to 0.2395, while directional accuracy reached 52.30\%. The eligible test windows differed slightly across models.\par
+\subsection*{What one training example contains}
+At forecast time the model reads ten consecutive observations. Each row contains 23 features. A single LSTM layer with 32 hidden units summarizes the window, and a linear output maps the last hidden state to one predicted log return. A positive next-day log return means the quoted pair closed higher.\par
+
+\textbf{Adding commodity prices.} In an exploratory run, we added gold prices, crude oil prices and World Bank Pink Sheet commodity data to the forex inputs. The model tended to predict next-day currency returns close to 0\%, forecasting little change in the exchange rate.\par
+\textbf{5 market inputs.} The target exchange rate, two other currency quotes, the federal funds rate and the US ten-year yield give the model cross-market context.\par
+\textbf{10 trend inputs.} Simple and exponential moving averages at 5, 10, 30, 50 and 100 days describe trends over different horizons.\par
+\textbf{8 momentum and risk inputs.} RSI, the current log return, three Bollinger-band values, rolling volatility and two range proxies describe recent moves and their variability.\par
+\subsection*{How the model is evaluated}
+The feature and target scalers use training observations. The same scales are applied to validation and test windows. Forecasts are converted back to log returns before evaluating directional accuracy relative to a zero-return threshold. Keeping this distinction matters because zero on the standardized scale represents the training mean.\par
+The data loading, window sequencing, and standardization follow the daily forecasting methodology.\par
+\subsection*{Data sources and splits}
+\begin{itemize}
+  \item \textbf{Data sources.} Historical daily rates from FRED (Federal Reserve H.10) covering over 6,800 trading days; live ticker data from Yahoo Finance (\texttt{EURUSD=X}, \texttt{INR=X}, \texttt{JPY=X}, \texttt{\textasciicircum TNX}). US bond markets close on US holidays while forex markets stay open; missing rows are forward-filled (\texttt{ffill}) so the feature matrix stays continuous without look-ahead.
+  \item \textbf{Strictly chronological split.} Train: $80\%$ ($\approx5{,}434$ days); Validation: $10\%$ ($\approx680$ days); Test: $10\%$ ($\approx681$ days). \texttt{StandardScaler} is fitted on the training window only and applied to validation and test without refitting.
+  \item \textbf{Why log returns rather than price levels.} A move of $+1.00$ on USD/INR represented $2.2\%$ in 2010 (rate $\approx45$) but only $1.2\%$ in 2026 (rate $\approx83$). Models trained on raw levels overfit to the absolute scale and fail on new price regimes. Log returns $y_t = \ln(C_{t+1}/C_t)$ remain near zero with stable variance across decades and are additive across time steps.
+  \item \textbf{Why regression rather than 3-class classification.} An intermediate experiment labelled each day Buy ($>\!+\tau$), Sell ($<\!-\tau$), or Hold ($[-\tau,+\tau]$). The classes were heavily imbalanced toward Hold with any small $\tau$, and the label discarded return magnitude---which is required to compute stop distances and position sizes. Predicting a continuous log return directly resolves both problems.
+\end{itemize}
+
+\section{Daily LSTM Directional Forecasting}\label{exp:2}
+\begin{itemize}
+  \item \textbf{Input.} Each sequence contains ten consecutive daily observations. The forex configuration combines 23 macroeconomic and technical features. A single LSTM layer with 32 hidden units passes its final state to a linear layer to produce a continuous next-day log return prediction.
+  \item \textbf{Objective.} The training objective employs \textit{BigMoveAwareLoss}, which weights squared errors progressively higher for tail price moves and incorporates a sign-mismatch penalty to penalize directional error.
+  \item \textbf{Evaluation Metric.} Directional accuracy is evaluated strictly relative to a zero-return threshold: a prediction is correct when $\operatorname{sgn}(\hat{y}_t) = \operatorname{sgn}(y_t)$. The always-up drift baseline scores $375/681$ ($55.07\%$) on USD/INR over the same 681 test observations, while the trained LSTM achieves $378/681$ ($55.51\%$).
+\end{itemize}
+\begin{table}[htbp]\centering\singlespacing
+\caption{Daily LSTM test results}
+\begin{tabularx}{\linewidth}{@{}p{0.34\linewidth}XXX@{}}\toprule
+Test series & Correct / total & Direction & Return RMSE\\\midrule
+USD/INR & 378 / 681 & 55.51\% & 0.00263\\
+EUR/USD before fine-tuning & 347 / 681 & 50.95\% & 0.00423\\
+EUR/USD after fine-tuning & 363 / 681 & 53.30\% & 0.00423\\
+NIFTY 50 index & 387 / 854 & 45.32\% & 0.00791\\
+S\&P 500 index & 1,111 / 2,470 & 44.98\% & 0.01201\\
+\bottomrule\end{tabularx}
+\end{table}
+\begin{figure}[htbp]\centering
+\includegraphics[width=\linewidth,height=51mm,keepaspectratio]{figures/4-accuracy.png}
+\caption[Currency forecasts and the always-up rule on the same test observations]{Currency forecasts and the always-up rule on the same test observations. USD/INR gained three correct calls over the baseline. Fine-tuned EUR/USD gained 22.}
+\end{figure}
+\begin{figure}[htbp]\centering
+\includegraphics[width=\linewidth,height=31mm,keepaspectratio]{figures/4-1_training_loss.png}
+\caption[Training and validation loss from the NIFTY 50 LSTM run]{Training and validation loss from the NIFTY 50 LSTM run. Its test direction score was 45.32\%.}
+\end{figure}
+Validation fine-tuning added 16 correct EUR/USD predictions. The two index experiments gave lower hit rates. These directional results measure one decision per forecast; trading returns additionally depend on the size, timing and cost of each position.\par
+\subsection*{Training the daily sequence model}
+For each ten-day window the network produces one forecast from the final 32-dimensional hidden state. The daily trainer uses Adam with weight decay $10^{-5}$. A validation-loss scheduler halves the learning rate after a plateau (patience four), and early stopping uses a patience of ten epochs. These settings govern the initial fit. The historical EUR/USD replay later updates the model on a separate schedule.
+
+\subsection*{Cross-asset strategy backtest summary}
+The same LSTM + BigMoveAwareLoss + GA pipeline (\texttt{GeneralTrainer}) was applied without manual re-tuning to all four assets. The table below adds backtested strategy performance to the directional accuracy results.
+\begin{table}[htbp]\centering\singlespacing
+\caption{Cross-asset daily strategy performance}
+\begin{tabularx}{\linewidth}{@{}p{0.22\linewidth}XXXXX@{}}
+\toprule
+Asset & Direction & MAE & RMSE & Strategy Sharpe & Calmar\\\midrule
+USD/INR (Forex) & 55.51\% & 0.00181 & 0.00263 & 2.10 & 4.52\\
+EUR/USD (Forex) & 53.30\% & 0.00310 & 0.00423 & 3.73 & 18.48\\
+Nifty 50 & 45.32\% & 0.00586 & 0.00791 & 3.87 & 11.82\\
+S\&P 500 & 44.98\% & 0.00827 & 0.01201 & 3.91 & 18.94\\
+\bottomrule
+\end{tabularx}
+\end{table}
+{\small\itshape Sharpe and Calmar are from the backtested strategy run on each asset's held-out test period. EUR/USD Sharpe and Calmar correspond directly to the fine-tuned test results (Section~\ref{exp:3.1}). Nifty and S\&P metrics are from the daily strategy run on those indices. Directional accuracy is evaluated relative to a zero-return threshold, with flat returns counted as up; the always-up baseline scores 55.07\% on USD/INR and 50.07\% on EUR/USD over the same 681 observations.}\par
+
+\subsection{How BigMoveAwareLoss weights forecast errors}\label{exp:2.1}
+Most daily returns are small. An estimate near the mean can therefore achieve a modest average squared error while missing the days with large price moves. The project introduced BigMoveAwareLoss to give those observations more influence during training.\par
+\subsection*{The objective formulation}
+Let z be the realized return in training-standard-deviation units after centering, and p the prediction on the same scale. Set B to 1 when $|z|$ is at least 1.5 and to 0 otherwise. The model averages the following loss over each batch.\par
+\[ L=(1+2|z|+4B)(p-z)^2+0.5(|z|+2B)\,\mathbf{1}_{pz<0}. \]
+\textbf{Magnitude term.} Squared error receives a weight of 1 + 2|z|. Crossing the large-move threshold adds another 4.\par
+\textbf{Direction term.} When p and z have opposite signs, the loss adds half of |z|, plus one more unit on a large move. A prediction of zero incurs no sign penalty.\par
+\subsection*{Worked example}
+For a realized z of +2, the squared-error weight is 9. A forecast of +1 incurs a loss of 9. A forecast of -1 incurs 81 from squared error and 2 from the sign penalty, bringing the loss to 83. The sign term changes the reported loss, but its hard sign operation has zero gradient almost everywhere. The weighted squared error supplies the gradient that updates the model.\par
+On the held-out test split, the USD/INR model achieved 378/681 correct directional predictions ($55.51\%$), compared with 375/681 ($55.07\%$) for the always-up drift baseline. Isolating the exact contribution of the custom loss requires training the identical architecture across multiple random seeds with standard mean squared error.\par
+The objective formulation and hyperparameter settings follow the loss specifications detailed above.\par
+
+\section{EUR/USD execution and the passive benchmark}\label{exp:3}
+\begin{itemize}\item \textbf{Backtesting engine (\texttt{AdvancedProfitCalculator}).} Trades risk a fixed percentage of equity per position. The stop loss sets the worst-case loss; take profit equals stop loss times the reward-to-risk ratio. A 1-pip (\$0.0001) fee is deducted on every entry and exit. An unoptimised baseline with default rules (SL$=0.40\%$, RRR$=2.0$, threshold$=0.01\%$) turned \$10{,}000 into \$19{,}035.45 on the validation period (+26.94\% CAGR, max drawdown $-13.81\%$, Sharpe 1.54).\end{itemize}
+\begin{itemize}\item \textbf{Strategy.} The forex genetic algorithm searched signal thresholds, stops, profit targets and sizing. The daily validation search used 40 individuals and 25 generations. A 0.20\% stop could be crossed intraday even on a day that ultimately closed in the predicted direction. The later execution simulation used wider excursion-based stops and periodic recalibration.\end{itemize}
+\begin{itemize}\item \textbf{Data resolution.} The execution code requests EURUSD=X bars from Yahoo Finance. Its historical-data path can forward-fill hourly or five-minute bars onto a one-minute grid. A minute timestamp therefore does not establish that every intraminute price move was observed.\end{itemize}
+\begin{itemize}\item \textbf{Benchmark.} Start with USD 10,000 and maintain an unleveraged long EUR position through all 65 evaluated daily returns, including the strategy's 20 idle sessions. The reference is the EUR/USD spot series in the simulation. It applies no trading signal or financing adjustment.\end{itemize}
+\begin{table}[htbp]\centering\singlespacing
+\caption{EUR/USD strategy and passive benchmark}
+\begin{tabularx}{\linewidth}{@{}p{0.34\linewidth}XX@{}}\toprule
+27 July--23 October 2026 & Ending USD & Period return\\\midrule
+LSTM trading strategy & 10,228.30 & +2.28\%\\
+Passive euro, exact compounding & 9,841.44 & -1.59\%\\
+Passive euro, original simulator ledger & 9,838.73 & -1.61\%\\
+\bottomrule\end{tabularx}
+\end{table}
+\begin{figure}[htbp]\centering
+\includegraphics[width=\linewidth,height=52mm,keepaspectratio]{figures/5-eur-benchmark.png}
+\caption[Equity from the trade ledger and the passive euro holding reconstructed from the same daily returns]{Equity from the trade ledger and the passive euro holding reconstructed from the same daily returns. Both start at USD 10,000 before the first evaluated return.}
+\end{figure}
+The ledger multiplies by (1 + daily log return); exact currency compounding multiplies by exp(daily log return). The strategy finished 3.87 percentage points above the exact reference. Its maximum recorded drawdown was -4.07\%. The 22 wins averaged USD 46.25, the 23 losses averaged USD 34.32 in magnitude. Annualizing +2.28\% over 65 sessions at 252 sessions per year gives +9.15\%.\par
+
+\subsection{Calibrating stops, targets and position size}\label{exp:3.1}
+A return forecast supplies a direction. The trading rule must also decide when to enter, how much capital to risk and when to exit. The EUR/USD experiment searched these decisions jointly on validation data using 40 candidate rules over 25 generations. Fitness was annualized growth divided by the absolute maximum drawdown.\par
+\textbf{Exit rules.} The search allowed stops from 0.10\% to 1.20\% and reward-to-risk ratios from 1 to 3.5. It selected a 0.20\% stop and a 3.5 ratio, implying a 0.70\% profit target.\par
+\textbf{Entry and exposure.} The selected configuration used a zero signal threshold, risked 2.696\% of equity per trade and capped leverage at 5 times equity. The search assumed one pip of transaction friction.\par
+\begin{figure}[htbp]\centering
+\includegraphics[height=52mm,width=\linewidth,keepaspectratio]{figures/ga-convergence.png}
+\caption[Validation fitness during the genetic search]{Validation fitness rose from 6.12 to 20.43 during the search. The curve measures selection on validation data.}
+\end{figure}
+\subsection*{How a daily forecast becomes a simulated trade}
+The daily backtester applies the entry threshold to the forecast and uses its sign to select a long or short position. For starting equity $E$, fractional risk $r$, stop distance $s$ and leverage limit $L$, the fixed-fractional rule sets the trade notional to
+\[
+N=\min\!\left(\frac{Er}{s},\,EL\right).
+\]
+For example, with USD 10,000, a 2.696\% risk budget and a 0.20\% stop, the uncapped notional is USD 134,800. The five-times leverage cap reduces it to USD 50,000. A move of 0.20\% against that position costs USD 100 before fees. The daily engine bounds the signed close-to-close move at the stop and profit target. Daily closes alone cannot establish which barrier the market reached first.
+
+\textbf{How the genetic search updates the rules.} Each candidate is a set of numerical trading parameters. After scoring the candidates on validation data, the optimizer copies the best rules into the next generation. It selects parents by tournament, blends their parameters and adds Gaussian mutations. This lets the search vary a stop distance and its associated reward-to-risk ratio together. The selected rule is then evaluated on the later test period.
+
+\subsection*{Why the execution rules changed}
+A long trade can fall 0.20\% after entry, hit its stop, and still close the day above its entry price. Daily closing prices hide that sequence. The execution study widened the stop range to 0.45--0.80\% and fine-tuned the model every ten sessions. Over 65 sessions it recorded 22 wins and 23 losses. Average wins of USD 46.25 exceeded average losses of USD 34.32, leaving a positive return despite winning fewer than half the trades.\par
+\textbf{Rolling forecast updates.} The replay's ten-session update schedule uses short fine-tuning runs (eight epochs at a learning rate of $5\times10^{-5}$). Updating the forecast weights and widening the execution stops affect different parts of the strategy. The combined replay measures their joint outcome.
+
+Source: BTP Executive Summary, pp. 4--6. The preceding section details the simulation's bar resolution and passive benchmark.\par
+\subsection*{Full daily test-set backtest results (681 trading days)}
+The table below summarises EUR/USD performance at three evaluation stages on the held-out daily test period. The GA was fitted on validation data only; test data were never touched during parameter search or model training.
+\begin{table}[htbp]\centering\singlespacing
+\caption{EUR/USD validation and test configurations}
+\begin{tabularx}{\linewidth}{@{}p{0.27\linewidth}XXXXX@{}}
+\toprule
+EUR/USD configuration & Net return & CAGR & Max DD & Sharpe & Calmar\\\midrule
+Unoptimised baseline (val) & +90.35\% & +26.94\% & $-13.81\%$ & 1.54 & --\\
+GA-evolved fitness target (val) & -- & +181.67\% & $-8.89\%$ & 4.34 & 20.43\\
+GA params, initial LSTM (test) & +518.59\% & +96.27\% & $-9.73\%$ & 3.27 & 9.90\\
+GA params, fine-tuned LSTM (test) & +704.39\% & +116.30\% & $-6.29\%$ & 3.73 & 18.48\\
+Buy-and-hold benchmark (test) & +6.99\% & -- & -- & -- & --\\
+\bottomrule
+\end{tabularx}
+\end{table}
+Starting capital was \$10{,}000 in all cases. The initial test run (\$10{,}000$\to$\$61{,}858.97) executed 650 trades at a 49.85\% win rate; profit factor was 1.61 and trade expectancy \$79.78 (Sortino: 13.26). Fine-tuning on the validation data before the test period raised final equity to \$80{,}439.08. The Calmar ratio improved from 9.90 to 18.48, reflecting lower drawdown alongside higher return. Strategy alpha versus buy-and-hold on the test period was +511.60 percentage points.
+These are daily close-to-close backtests. Section~\ref{exp:3} documents the separate historical simulation on a one-minute grid, which reveals the execution gap: the tight 20-pip daily stop-loss is too small to survive intraday noise, so it was widened to 45--80\,pips for minute-level trading.\par
+
+\chapter{Intraday Equity Data and Trading Methods}
+\section{Auditing the one-minute equity data}\label{exp:4}
+Historical Indian equity data came from Kaggle, with FYERS API updates for recent observations (100 stock files). Intraday 1-minute OHLCV data for US equities was obtained from the HF Data Library (Elkassabgi, 2024), built upon official trade reports from the IEX Exchange HIST feed (March 2022 onwards) covering 95 US stock files. Each stock has its own start date and observation history.\par
+\begin{itemize}\item \textbf{Build the expected calendar.} The EDA notebook maps timestamps to scheduled sessions and compares observed rows with expected tradable minutes. A holiday, a date before a stock's first observation and an absent bar in the middle of a session require different treatment.\end{itemize}
+\begin{itemize}\item \textbf{Locate missing runs.} The Indian missing-run summary contains 36,340 runs covering 102,724 minutes across its 97 stock rows. Of those runs, 27,611 were single missing minutes. HAL alone had 7,788 runs, with one interruption lasting 227 minutes.\end{itemize}
+\begin{itemize}\item \textbf{Repair eligible short gaps.} ABB was missing 09:30--09:31 on 13 March 2015. A two-bar repair requires two valid observations on either side in the same session. Each field is averaged over those four surrounding bars; both missing rows receive that field's mean.\end{itemize}
+\begin{itemize}\item \textbf{Preserve longer interruptions.} ABB's gap at 09:15--09:34 on 16 March spans 20 minutes. It exceeds the three-minute limit and remains missing. The feature pipeline restarts its rolling history after the break.\end{itemize}
+\begin{figure}[htbp]\centering
+\includegraphics[width=\linewidth,height=65mm,keepaspectratio]{figures/6-gap-audit.png}
+\caption[Seven stocks with the most missing minutes in the Indian run-level audit]{Seven stocks with the most missing minutes in the Indian run-level audit. The darker segment counts isolated missing minutes; the balance belongs to longer runs.}
+\end{figure}
+The short-gap repair uses future observations. The pipeline marks repaired rows. The quantitative strategy loader excludes imputed bars and masks downstream indicators affected within the segment. A causal-filling comparison remains relevant for the forecasting branch.\par
+
+\section{Feature construction and indicator screening}\label{exp:5}
+\begin{itemize}
+  \item \textbf{Preventing overnight distortions (Segmenting).} The market closes at 15:30 and reopens at 09:15 the next morning. If we calculate a 1-minute return across that overnight gap, the model sees a fake price jump. Our pipeline breaks data into separate continuous sessions so rolling windows restart cleanly after overnight gaps or missing bars.
+  \item \textbf{Feature families.} We constructed features across three main families:
+\end{itemize}
+
+\begin{table}[htbp]\centering\singlespacing
+\caption{Intraday equity feature families}
+\begin{tabularx}{\linewidth}{@{}p{0.26\linewidth}X@{}}\toprule
+Feature family & Examples and application\\\midrule
+Price movement and trend & Simple/log returns, SMA, EMA, MACD and fitted trend slope\\
+Range and momentum & RSI, Bollinger bands and Donchian channels for reversal or breakout signals\\
+Volume and volatility & VWAP, relative volume, OBV and rolling volatility. Optional daily GARCH uses earlier sessions, with 60--252 returns of history.\\
+\bottomrule\end{tabularx}
+\end{table}
+
+\subsection*{Did additional indicators improve the forecast?}
+\textbf{The direct answer is no: adding more indicators made the forecast worse.}
+
+To test whether popular technical indicators actually help predict returns, we evaluated 61 indicators on 209,888 five-minute NIFTY bars across 5-, 15-, and 60-minute horizons:
+\begin{enumerate}
+  \item \textbf{Heavy redundancy:} Out of 61 indicators, 114 pairs had over 95\% correlation, which flooded the model with redundant noise.
+  \item \textbf{Which indicators were removed vs.\ retained (61 $\rightarrow$ 32):}
+  \begin{itemize}
+    \item \textit{Removed 18 absolute price levels:} Raw MACD lines, ATR rupee values, absolute moving average levels, and Bollinger band levels were discarded because their absolute scale drifts over time.
+    \item \textit{Removed 11 collinear indicators ($\rho > 0.95$):} \texttt{price\_zscore\_20} was dropped because it is identical ($\rho = 1.0$) to \texttt{bb\_position\_20}; \texttt{return\_1} was dropped in favour of \texttt{log\_return\_1} ($\rho = 1.0$); \texttt{candle\_body\_pct} was removed ($\rho = 0.975$); several EMAs (\texttt{close\_to\_ema\_5, 12, 20, 50, 75}) were eliminated because their corresponding SMAs already captured the same trend ($\rho > 0.96$); and \texttt{rsi\_14} was dropped due to high collinearity ($\rho = 0.974$) with trend distance (\texttt{close\_to\_ema\_26}).
+    \item \textit{Retained 32 compact features:} Multi-horizon log returns and lags (1, 3, 6, 12, 24, 75 bars), normalized SMA/EMA distances (5, 12, 20, 26, 50, 75), Stochastic oscillators (\texttt{\%K}, \texttt{\%D}), Bollinger width/position, return volatilities, and intraday candle geometry (wick percentages, range, overnight gap).
+  \end{itemize}
+  \item \textbf{Removing clutter helped, but still trailed persistence:} As shown in Figure~6, pruning the 61 indicators down to 32 reduced forecast error across all three horizons. However, both models stayed below zero ``skill'' (meaning they performed worse than simply assuming the price would not change). In fact, simply feeding recent returns alone beat the entire 61-indicator suite.
+\end{enumerate}
+
+\begin{figure}[htbp]\centering
+\includegraphics[width=\linewidth,height=51mm,keepaspectratio]{figures/7-skill.png}
+\caption[Prediction skill relative to the persistence baseline (predicting no change, shown as 0\%)]{Prediction skill relative to the persistence baseline (predicting no change, shown as 0\%). Negative values mean the model did worse than predicting unchanged price. Cutting the indicator set from 61 down to 32 reduced the error across all horizons, but neither could beat the simple baseline.}
+\end{figure}
+
+\textbf{Takeaway:} Stacking dozens of standard indicators creates multicollinearity and degrades forecast accuracy. A compact, screened feature set is far superior to an uncurated indicator pool.
+
+
+\section{Trading the intraday LSTM forecasts}\label{exp:6}
+\begin{itemize}\item \textbf{Prediction task.} Use 30 consecutive one-minute bars to predict the next bar's simple return. The seven features are simple return, log return, RSI(14), 20-bar percentage trend slope, 30-bar rolling volatility, 20-bar relative volume and log volume. Windows stay inside a continuous segment.\end{itemize}
+\begin{itemize}\item \textbf{Training.} An 80/10/10 chronological split keeps whole sessions together. Adam optimizes the magnitude-weighted loss. The equity run adds extra weight when absolute returns reach 0.005, equivalent to a 0.5\% one-bar move.\end{itemize}
+\begin{itemize}\item \textbf{Threshold policy.} Seek a long position when the predicted return exceeds 0.0001 (one basis point). The environment charges 0.00005 per side by default, so an entry and exit together cost about one basis point before execution effects.\end{itemize}
+\begin{itemize}\item \textbf{Q-learning policy.} The state combines a forecast bucket, current position and one of three time-of-day buckets. Out-of-fold forecasts from earlier training windows supply policy experience; validation returns select the policy used on the test period.\end{itemize}
+\begin{table}[htbp]\centering\singlespacing
+\caption{Threshold and Q-policy trades}
+\begin{tabularx}{\linewidth}{@{}p{0.34\linewidth}XXXX@{}}\toprule
+Stock & Threshold trades & Threshold P\&L & Q trades & Q P\&L\\\midrule
+ADANIGREEN & 230 & -2,801.58 & 0 & 0.00\\
+HYUNDAI & 337 & +34.04 & 340 & -3.54\\
+LTIM & 224 & +52.04 & 224 & -1,334.78\\
+RELIANCE & 26 & -188.86 & 44 & +47.24\\
+\bottomrule\end{tabularx}
+\end{table}
+\begin{figure}[htbp]\centering
+\includegraphics[width=\linewidth,height=46mm,keepaspectratio]{figures/8-paired-trades.png}
+\caption[Cumulative net P\&L from the matched LTIM and RELIANCE logs]{Cumulative net P\&L from the matched LTIM and RELIANCE logs. Each curve advances at completed trade exits under its own policy.}
+\end{figure}
+\subsection*{What the paired logs show}
+\begin{itemize}\item \textbf{ADANIGREEN.} The learned policy stayed in cash while the threshold rule accumulated losses. Zero here means that the RL trade file contained no completed trades.\end{itemize}
+\begin{itemize}\item \textbf{LTIM and RELIANCE.} On LTIM both policies completed 224 trades, yet their outcomes differed by 1,386.82. On RELIANCE the learned policy turned a loss into a gain. A change in the trade count alone cannot explain both outcomes.\end{itemize}
+The P\&L columns sum the logged net result per 10,000 of trade notional. They measure fixed-size trade outcomes. The portfolio experiments that follow use shared cash and report compounded account returns.\par
+
+\section{Parameter search and genetic programming}\label{exp:7}
+The daily forex experiment evolved numeric trading parameters. The equity pipeline searches two different spaces: the settings of a predefined strategy and the structure of a trading rule.\par
+\begin{table}[htbp]\centering\singlespacing
+\caption{Equity strategy search parameters}
+\begin{tabularx}{\linewidth}{@{}p{0.26\linewidth}X@{}}\toprule
+Equity strategy & What the search varies\\\midrule
+VWAP mean reversion & VWAP window, deviation threshold and trend moving average\\
+RSI mean reversion & RSI period, oversold level and overbought level\\
+Bollinger reversion & Lookback period and band width\\
+Donchian breakout & Lookback for the breakout channel\\
+\bottomrule\end{tabularx}
+\end{table}
+\begin{itemize}\item \textbf{Parameter grid.} Each candidate is evaluated alongside stop distances of 0.50\%, 0.75\% and 1.00\%, and reward-to-risk ratios of 1, 2 or 3. A stop of 0.75\% paired with a ratio of 2 implies a 1.50\% target.\end{itemize}
+\begin{itemize}\item \textbf{Genetic programming.} Leaves compare RSI or Bollinger position with a threshold. AND and OR nodes combine comparisons. The default search evolves 40 trees for 12 generations through tournament selection, subtree crossover and mutation. A per-node penalty discourages redundant conditions.\end{itemize}
+\begin{itemize}\item \textbf{Walk-forward test.} The default schedule fits six past calendar months, freezes the selected rule for the next month, then advances by one month. A training winner can earn less than another candidate in the following evaluation month.\end{itemize}
+\begin{figure}[htbp]\centering
+\includegraphics[width=\linewidth,height=60mm,keepaspectratio]{figures/9-ABB.png}
+\caption[Saved ABB walk-forward comparison from the Calmar experiment]{Saved ABB walk-forward comparison from the Calmar experiment. Each strategy and the monthly selected rule accumulate their own outcomes; the portfolio layer subsequently decides which stocks receive capital.}
+\end{figure}
+
+\chapter{Results and Discussion}
+\section{Indian equity portfolio}\label{exp:8}
+\begin{itemize}\item \textbf{Stock selection.} At each monthly rebalance the simulator ranks stocks by their selected strategy's compounded return over the preceding three complete months. The current evaluation month is excluded from that ranking.\end{itemize}
+\begin{itemize}\item \textbf{Shared account.} Eligible signals compete for cash. Orders use whole shares. Strategy scoring uses observed closes, while the portfolio replay uses next-open execution rules and can defer exits. The portfolio curve therefore cannot be recovered by simply averaging stock-level returns.\end{itemize}
+\begin{table}[htbp]\centering\singlespacing
+\caption{Indian shared-capital portfolios}
+\begin{tabularx}{\linewidth}{@{}p{0.34\linewidth}XX@{}}\toprule
+1 Dec 2020--6 Aug 2025 & Top 10 & Top 20\\\midrule
+Allocation per entry & 12\% & 10\%\\
+Cumulative return & +250.87\% & +104.85\%\\
+Maximum daily drawdown & -19.83\% & -24.73\%\\
+Executed fills & 45,872 & 50,210\\
+\bottomrule\end{tabularx}
+\end{table}
+\begin{figure}[htbp]\centering
+\includegraphics[width=\linewidth,height=77mm,keepaspectratio]{figures/10-portfolio_value.png}
+\caption[Shared-capital Indian top-10 replay]{Shared-capital Indian top-10 replay. The account rose from INR 1,000,000 to INR 3,508,725.13, with a maximum daily peak-to-trough decline of 19.83\%.}
+\end{figure}
+\begin{itemize}\item \textbf{Costs.} The selected run recorded INR 3,419,384.13 in cumulative modeled fees over repeated turnover. Those charges are already reflected in ending equity. The fee model applies an encoded tariff scenario to the historical period.\end{itemize}
+\begin{itemize}\item \textbf{Interpretation.} The top-10 run had the higher return and smaller daily drawdown. It also allocated more per entry. These runs do not isolate the effect of choosing ten stocks rather than twenty.\end{itemize}
+
+\section{US equity portfolio}\label{exp:9}
+The US replay uses a three-month stock-ranking lookback, shared capital of USD 100,000 and a 5$\times$ leverage setting. Both portfolio-size runs use 10\% notional allocation. This setting limits entry notional as a share of equity; the leverage parameter governs margin funding.\par
+\begin{table}[htbp]\centering\singlespacing
+\caption{US shared-capital portfolios}
+\begin{tabularx}{\linewidth}{@{}p{0.34\linewidth}XX@{}}\toprule
+1 May 2025--12 Nov 2026 & Top 10 & Top 20\\\midrule
+Starting equity & 100,000.00 & 100,000.00\\
+Ending equity & 108,923.13 & 112,499.25\\
+Cumulative return & +8.92\% & +12.50\%\\
+Maximum daily drawdown & -1.46\% & -1.20\%\\
+Fills / recorded fees & 8,438 / 1,277.16 & 13,764 / 2,223.42\\
+\bottomrule\end{tabularx}
+\end{table}
+\begin{figure}[htbp]\centering
+\includegraphics[width=\linewidth,height=70mm,keepaspectratio]{figures/11-portfolio_value.png}
+\caption[US top-20 replay]{US top-20 replay. On the same dates and nominal allocation, it returned 3.58 percentage points more than the top-10 run.}\label{fig:us-top20}
+\end{figure}
+\begin{itemize}\item \textbf{Execution record.} The top-20 ledger reports one overnight stock-day and zero margin events. Each fill is an executed order; a round trip normally generates both an entry and an exit.\end{itemize}
+\begin{itemize}\item \textbf{Fee attribution.} The engine puts SEC and FINRA charges into legacy fields named sebi and ipft. The summary also has nonzero charge categories that the US fee function sets to zero. The return above reflects the recorded ledger; exchange-specific attribution remains unresolved.\end{itemize}
+
+\subsection*{US portfolio activity before and after March 2026}
+From May 2025 through February 2026, MMC was the only stock with a trailing score in the monthly ranking file. Each portfolio executed 12 orders over those ten months. In March, 94 stocks had scores and the allocation rule admitted the highest-ranked 10 or 20. A stock's first usable record dates its coverage in this experiment. Establishing its listing date would require separate exchange records.
+
+\begin{center}\small
+\begin{tabular}{@{}lrr@{}}\toprule
+Metric & Full replay & Active period\\\midrule
+Top-10 return & 8.92\% & 8.89\%\\
+Top-20 return & 12.50\% & 12.46\%\\
+Equal-money buy-and-hold return & 40.97\% & 13.28\%\\
+Top-10 maximum daily drawdown & $-1.46$\% & $-1.46$\%\\
+Top-20 maximum daily drawdown & $-1.20$\% & $-1.20$\%\\
+Average margin use (top 10 / top 20) & 0.52\% / 0.90\% & 1.12\% / 1.94\%\\
+Executed fills (top 10 / top 20) & 8,438 / 13,764 & 8,426 / 13,752\\
+\bottomrule\end{tabular}\end{center}
+The full replay begins on 1 May 2025. Active-period returns use the last pre-March valuation as their base and end on 12 November 2026. The benchmark carries its original 95 equal-money allocations forward, buying at each file's first available open within the replay and valuing holdings at the latest available close. Both strategies trailed holding even in the active period. The thin early ranking pool limited trading opportunities. These records alone cannot isolate predictive skill.
+
+\begin{figure}[htbp]\centering
+\includegraphics[width=.93\linewidth]{figures/monthly-us.png}
+\caption[Monthly US portfolio eligibility and activity]{Monthly ranking coverage, eligible stocks, executed buy and sell orders, and average margin use. For each recorded session, entry margin is integrated over 09:30--16:00 and divided by the 390-minute window and opening equity (previous close). Monthly means include idle sessions. Margin measures capital committed under leverage. November 2026 ends on the 12th.}
+\end{figure}
+
+\subsection{Shared portfolios versus buy-and-hold}\label{exp:9.1}
+India: 1 December 2020 to 6 August 2025. US: 1 May 2025 to 12 November 2026. Within each market, the active portfolios and passive benchmark are measured over the same calendar period.\par
+\begin{tabular*}{\linewidth}{@{\extracolsep{\fill}}lrrrr@{}}\toprule
+Portfolio & India return & Excess (pp) & US return & Excess (pp)\\\midrule
+Equal-money buy-and-hold & +220.97\% & - & +40.97\% & -\\
+Top 10 & +250.87\% & +29.90 & +8.92\% & -32.04\\
+Top 20 & +104.85\% & -116.12 & +12.50\% & -28.47\\
+\bottomrule\end{tabular*}\par
+Excess return is the active return less the passive return, in percentage points (pp), calculated before rounding.\par
+\subsection*{India}
+INR 10 lakh grew to INR 32.10 lakh by holding, INR 35.09 lakh with the top 10, and INR 20.48 lakh with the top 20. Only the top 10 beat holding. Its maximum daily drawdown was 19.83\%. Ending equity includes INR 34.19 lakh in modeled fees over 45,872 fills. The top 10 allocated 12\% per entry and the top 20 allocated 10\%, so the comparison also reflects position sizing.\par
+\subsection*{United States}
+USD 100,000 grew to approximately USD 140,967 by holding, USD 108,923 with the top 10, and USD 112,499 with the top 20. Both active portfolios earned a profit and trailed holding. The saved fee ledger contains nonzero charge categories that require reconciliation.\par
+
+\subsection*{How the Buy-and-Hold Benchmark was built}
+To evaluate whether active trading created real value, we compared our strategies against an equal-weight \textbf{Buy-and-Hold} baseline:
+\begin{itemize}
+  \item \textbf{Initial Investment:} Starting capital was divided equally across all stocks in the universe on Day 1 (1\% per stock across 100 Indian equities, and $\approx 1.05\%$ per stock across 95 US equities) and held until the end of the period without rebalancing.
+  \item \textbf{Handling start/end dates:} If a stock's downloaded price history began after the start date (7 Indian stocks), its assigned capital remained in cash until its first trade. If a downloaded series ended before the evaluation end date (1 US stock), its valuation was held at its last recorded close.
+  \item \textbf{Assumptions:} The benchmark reflects pure price appreciation using recorded prices; it assumes zero rebalancing costs and does not reinvest cash dividends.
+\end{itemize}
+
+
+\subsection{Trading charges in the Indian and US top-10 portfolios}\label{exp:9.2}
+For a strategy that repeatedly buys and sells, the relevant hurdle is the fee per unit traded. On the recorded fills, an Indian round trip required about 5.21 basis points of price improvement to cover explicit charges. The US replay required 0.29 basis points under its zero-commission assumption. One basis point is 0.01\%.
+\begin{table}[htbp]\centering\singlespacing
+\caption{Transaction charges in the top-ten portfolios}
+\begin{tabularx}{\linewidth}{@{}Xrr@{}}\toprule
+Recorded measure & India (INR) & US (USD)\\\midrule
+Buy plus sell turnover & 13,133,724,706 & 88,718,955\\
+Explicit fees & 3,419,384 & 1,277\\
+Trading profit before recorded fees & 5,928,109 & 10,200\\
+Profit after recorded fees & 2,508,725 & 8,923\\
+Share of pre-fee profit consumed & 57.68\% & 12.52\%\\
+Round-trip fee equivalent & 5.21 bp & 0.29 bp\\\bottomrule
+\end{tabularx}
+\end{table}
+\subsection*{Which Indian charges mattered most?}
+\begin{itemize}
+\item Securities transaction tax accounted for INR 1,648,094 (48.2\% of fees). Brokerage added INR 917,440 (26.8\%). Together they accounted for three quarters of the bill.
+\item Exchange charges contributed INR 403,191, GST INR 240,103 and stamp duty INR 197,305. Regulatory and depository charges made up the remainder.
+\end{itemize}
+\subsection*{What a small trading edge would retain}
+At the observed turnover mix, a signal earning 4 bp gross per round trip would lose about 1.21 bp in India and retain 3.71 bp in the US replay before spread and slippage. The Indian strategy itself remained profitable after fees. The two portfolios traded different stocks on different dates with different sizing, so their returns cannot isolate a country effect.
+\par\smallskip
+{\small Method and sources. Turnover sums shares times fill price across buys and sells in each top-10 executed-trades ledger. Round-trip equivalent equals 20,000 times total fees divided by turnover. Pre-fee profit adds recorded fees back to net profit with fills held fixed. The Indian replay applies the statutory FYERS tariff schedule to historical trades. The US replay models zero brokerage and regulatory fees. Actual US commissions depend on broker plan and eligibility. Sources: the executed trade logs and historical portfolio accounting ledgers.}
+
+\section{Reinforcement learning over strategy signals}\label{exp:10}
+\begin{itemize}
+  \item \textbf{Observations.} The final policy evaluates 95 US equities using five strategy signals (four technical strategies plus the evolved GP rule), price returns relative to the previous close, current cash, and time of day. A shared actor--critic network selects HOLD, BUY, or SELL for each stock.
+  \item \textbf{Intraday Execution (Zero Overnight Risk).} The policy operates on a strict daily intraday schedule:
+  \begin{itemize}
+    \item \textit{Daily Entry at Open (09:31 ET):} The agent selects and buys up to 10 top-conviction stocks each morning, allocating 4\% of account equity per position (maximum 40\% total equity exposed).
+    \item \textit{Daily Square-Off at Close (15:55 ET):} All positions are liquidated before the market close. This routine is executed every single trading day, ensuring zero overnight exposure or earnings-gap risk.
+  \end{itemize}
+  \item \textbf{Learning and Reward Function.} The policy is trained using an advantage actor--critic (A2C) architecture. To align agent behavior with capital preservation rather than unconstrained turnover, the step reward $\mathcal{R}_t$ explicitly rewards portfolio equity growth while penalizing any expansion in running peak-to-trough drawdown:
+  \begin{equation}
+    \mathcal{R}_t = \ln\left(\frac{E_t}{E_{t-1}}\right) - \lambda_{\text{dd}} \cdot \max\left(0, D_t - D_{t-1}\right)
+  \end{equation}
+  where:
+  \begin{itemize}[leftmargin=1.2cm, itemsep=1pt]
+    \item $E_t = \text{cash}_t + \sum_{j=1}^N q_{j,t} C_{j,t}$ is the total portfolio equity at minute $t$ after all executed fills and transaction fees,
+    \item $\ln(E_t / E_{t-1})$ is the one-step logarithmic growth rate of portfolio equity,
+    \item $D_t = 1 - \frac{E_t}{\max_{0 \le s \le t} E_s}$ is the instantaneous peak-to-trough drawdown from the historical running equity high watermark,
+    \item $\max(0, D_t - D_{t-1})$ applies a non-negative penalty strictly when a step increases the portfolio drawdown,
+    \item $\lambda_{\text{dd}} = 1.0$ is the drawdown aversion weighting coefficient.
+  \end{itemize}
+  The gradient update scales this step reward by a factor of 100 ($r_t = 100 \cdot \mathcal{R}_t$) with discount factor $\gamma = 0.99$ and entropy regularization. Model checkpoints are selected on validation data using cumulative return adjusted for maximum drawdown.
+\end{itemize}
+\begin{table}[htbp]\centering\singlespacing
+\caption{Drawdown-aware policy performance}
+\begin{tabularx}{\linewidth}{@{}p{0.34\linewidth}XX@{}}\toprule
+Drawdown-aware policy & Validation & Held-out test\\\midrule
+Period & Jun--Aug 2026 & 1 Sep--12 Nov 2026\\
+Cumulative return & +4.00\% & +4.02\%\\
+Maximum drawdown & -1.76\% & -1.38\%\\
+Fills / fees (USD) & 1,280 / 70.95 & 1,040 / 57.03\\
+\bottomrule\end{tabularx}
+\end{table}
+\begin{figure}[htbp]\centering
+\includegraphics[width=\linewidth,height=61mm,keepaspectratio]{figures/12-equity.png}
+\caption[Saved validation and test equity curves]{Saved validation and test equity curves. The test started at USD 100,000 and ended at USD 104,016.35. Each panel begins with its own starting capital.}
+\end{figure}
+A separate 95-stock policy stayed in cash throughout validation and test. The active policy beat that zero-return reference on the held-out period. Establishing an advantage over the top-20 rules portfolio requires a replay on matching dates with matching exposure limits.\par
+
+
+\chapter{Conclusions and Scope for Future Work}
+\section{Conclusions}
+
+\subsection*{Comprehensive Experimental Conclusions}
+Across all six experimental phases, this project investigated the translation of machine learning forecasts into executable trading strategies:
+
+\begin{itemize}[leftmargin=1.5cm, itemsep=3pt]
+  \item \textbf{Predictive Modeling and the Martingale Barrier.} Using log returns resolved price non-stationarity, and \textit{BigMoveAwareLoss} prevented neural mean-collapse on rare large moves. However, out-of-sample directional accuracy on USD/INR reached 55.51\% (beating the always-up drift baseline by just 3 trades in 681), confirming that daily exchange rate moves closely approximate a random walk.
+
+  \item \textbf{The Stop-Loss Granularity Mismatch.} Trading rules optimized on daily closing prices fail on intraday tick data because daily bars mask intraday noise (Maximum Adverse Excursion $\approx 0.45\%$). Re-calibrating stops to 0.45--0.80\% and applying 10-day rolling fine-tuning enabled the EUR/USD strategy to achieve +2.28\% net return with a low -4.07\% drawdown, outperforming the passive holding by 3.87 percentage points despite a win rate below 50\%.
+
+  \item \textbf{Indicator Multicollinearity in High Frequency Data.} Evaluating 61 technical indicators on 209,888 five-minute NIFTY bars revealed 114 pairs with rank correlation above 0.95. The screen removed 18 absolute-price features and 11 collinear features, leaving 32 candidates.
+
+  \item \textbf{Rigorous Data Auditing and Session Segmentation.} Analyzing 102,724 missing minutes across Indian equity histories demonstrated that market-close boundaries and missing data runs must be isolated. Resetting rolling windows across session boundaries is vital to prevent overnight gap distortion from corrupting intraday features.
+
+  \item \textbf{Portfolio Compounding vs.\ Transaction Drag.} The Indian Top-10 active strategy compounded ₹10 Lakh to ₹35.09 Lakh (+250.87\% vs. +220.97\% buy-and-hold). However, active turnover incurred ₹34.19 Lakh in modeled fees across 45,872 fills, consuming 57.68\% of gross profits. In high-turnover trading, statutory costs (STT, stamp duty, exchange levies) form a substantial structural hurdle (5.21\,bp per round trip).
+
+  \item \textbf{Multi-Signal Reinforcement Learning with Zero Overnight Risk.} An actor--critic policy allocating capital across 95 US equities achieved +4.02\% cumulative return with a minimal -1.38\% maximum drawdown on held-out test data. Enforcing strict morning entry (09:31 ET) and complete end-of-day liquidation (15:55 ET) protected the portfolio entirely from overnight earnings shocks and gap risk.
+\end{itemize}
+
+
+\section{Scope for Future Work}
+The insights and empirical limitations identified in this work suggest four concrete research avenues:
+
+\begin{itemize}[leftmargin=1.5cm, itemsep=3pt]
+  \item \textbf{Central Bank NLP and Policy Text Mining.} Central bank currency interventions and surprise interest rate decisions (RBI, ECB, Fed) create massive non-stationary shocks that statistical time-series models treat as outliers. Incorporating transformer-based sentiment and hawkish/dovish tone extraction from official FOMC and MPC meeting statements could supply predictive macro regime signals before high-impact economic releases.
+  
+  \item \textbf{Post-Hoc Explainability (SHAP) for Policy Decisions.} While the RL actor--critic agent successfully selected profitable intraday baskets, neural policies act as black boxes. Applying SHAP (Shapley Additive Explanations) to the policy's observation vector across market regimes would systematically uncover whether the agent relies on trend signals, mean-reversion, or cash constraints during market pullbacks.
+
+  \item \textbf{Market Microstructure and Limit Order Book (LOB) Execution.} The current execution model assumes fills at opening or closing bar prices. Future simulations should utilize high-frequency Level-2 order book quotes to dynamically simulate queue position, bid-ask spread crossing, market impact of large basket orders, and exchange-specific maker/taker fee rebates.
+
+  \item \textbf{Advanced Temporal Architectures and Indian Market Transfer.} The single-layer LSTM can be upgraded to modern time-series foundation architectures such as PatchTST, TimesNet, or Temporal Fusion Transformers (TFT) that capture multi-scale cross-asset dependencies (e.g., cross-attention between US Treasury yields, crude oil, and USD/INR). Furthermore, deploying the multi-signal RL agent on the 100-stock Indian universe will test its robustness against high domestic transaction friction (5.21\,bp hurdle).
+\end{itemize}
+
+
+\appendix
+
+\chapter{Research Workflow and System Architecture}\label{app:architecture}
+
+The experimental pipeline developed in this work spans seven interconnected modules, transitioning from multi-source data ingestion to realistic portfolio execution and policy learning. Figure~\ref{fig:full-arch} illustrates the overarching system architecture.
+
+\begin{figure}[!htbp]\centering
+\resizebox{0.96\linewidth}{!}{%
+\begin{tikzpicture}[
+  x=1cm, y=1cm,
+  headerbox_fx/.style={
+    rectangle, draw=blue!70!black, fill=blue!10, rounded corners=3pt,
+    font=\small\bfseries, align=center, inner sep=4pt, line width=0.8pt
+  },
+  headerbox_eq/.style={
+    rectangle, draw=teal!70!black, fill=teal!10, rounded corners=3pt,
+    font=\small\bfseries, align=center, inner sep=4pt, line width=0.8pt
+  },
+  databox/.style={
+    rectangle, draw=orange!80!black, fill=orange!6, rounded corners=3pt,
+    font=\scriptsize, align=left, inner sep=4.5pt, line width=0.6pt
+  },
+  procbox/.style={
+    rectangle, draw=teal!80!black, fill=teal!6, rounded corners=3pt,
+    font=\scriptsize, align=left, inner sep=4.5pt, line width=0.6pt
+  },
+  modelbox/.style={
+    rectangle, draw=blue!75!black, fill=blue!6, rounded corners=3pt,
+    font=\scriptsize, align=left, inner sep=4.5pt, line width=0.6pt
+  },
+  execbox/.style={
+    rectangle, draw=purple!75!black, fill=purple!6, rounded corners=3pt,
+    font=\scriptsize, align=left, inner sep=4.5pt, line width=0.6pt
+  },
+  evalbox/.style={
+    rectangle, draw=green!60!black, fill=green!6, rounded corners=3pt,
+    font=\scriptsize, align=left, inner sep=4.5pt, line width=0.6pt
+  },
+  arrow/.style={
+    -{Stealth[length=2.5mm, width=1.5mm]}, line width=0.8pt, draw=black!75
+  }
+]
+
+% Track Headers (Row 0)
+\node[headerbox_fx, text width=68mm, minimum height=8mm] (head_fx) at (-3.75, 0.0) {\textbf{Track A: Macro \& Forex Pipeline}};
+\node[headerbox_eq, text width=68mm, minimum height=8mm] (head_eq) at ( 3.75, 0.0) {\textbf{Track B: Equities \& Portfolio Pipeline}};
+
+% Tier 1: Data Ingestion
+\node[databox, text width=68mm, minimum height=17mm] (t1_fx) at (-3.75, -1.7) {%
+  \textbf{\textcolor{orange!90!black}{STAGE 1: DATA INGESTION}}\\[1.5pt]
+  \textbf{FRED Macro \& Yahoo Finance FX Feeds}\\
+  \textbullet~FRED daily yields, FFER, macro rates (6,800+ days)\\
+  \textbullet~Yahoo Finance EUR/USD \& USD/INR (Daily \& 1-min)
+};
+\node[databox, text width=68mm, minimum height=17mm] (t1_eq) at ( 3.75, -1.7) {%
+  \textbf{\textcolor{orange!90!black}{STAGE 1: DATA INGESTION}}\\[1.5pt]
+  \textbf{High-Frequency Equity Datasets}\\
+  \textbullet~100 Indian equities (Kaggle + FYERS API, 1-min bars)\\
+  \textbullet~95 US equities (IEX HIST Feed, 1-min bars)
+};
+
+% Tier 2: Preprocessing & Stationarity
+\node[procbox, text width=68mm, minimum height=17mm] (t2_fx) at (-3.75, -3.8) {%
+  \textbf{\textcolor{teal!90!black}{STAGE 2: PREPROCESSING \& STATIONARITY}}\\[1.5pt]
+  \textbf{Calendar Alignment \& Return Target}\\
+  \textbullet~US holiday forward-fill; Strict 80/10/10 temporal split\\
+  \textbullet~Log returns $y_t = \ln(C_{t+1}/C_t)$; Zero-return evaluation
+};
+\node[procbox, text width=68mm, minimum height=17mm] (t2_eq) at ( 3.75, -3.8) {%
+  \textbf{\textcolor{teal!90!black}{STAGE 2: PREPROCESSING \& AUDITING}}\\[1.5pt]
+  \textbf{Session Segmentation \& Gap Audit}\\
+  \textbullet~Isolate overnight gaps; 4-bar mean imputation ($\le 3$\,min)\\
+  \textbullet~Segment resets for long gaps; Train-only scaling
+};
+
+% Tier 3: Feature Engineering
+\node[procbox, text width=68mm, minimum height=17mm] (t3_fx) at (-3.75, -5.9) {%
+  \textbf{\textcolor{teal!90!black}{STAGE 3: FEATURE ENGINEERING}}\\[1.5pt]
+  \textbf{Macro \& Technical Indicators (23 Features)}\\
+  \textbullet~3 exchange rates, federal funds rate, 10-year Treasury yield\\
+  \textbullet~10 SMA/EMA trends + 8 momentum/volatility metrics
+};
+\node[procbox, text width=68mm, minimum height=17mm] (t3_eq) at ( 3.75, -5.9) {%
+  \textbf{\textcolor{teal!90!black}{STAGE 3: REDUNDANCY SCREENING}}\\[1.5pt]
+  \textbf{Screened Compact Indicators (61 $\to$ 32)}\\
+  \textbullet~18 absolute-price features removed\\
+  \textbullet~11 further features removed for collinearity
+};
+
+% Tier 4: Predictive Modeling & Strategy Optimization
+\node[modelbox, text width=68mm, minimum height=17mm] (t4_fx) at (-3.75, -8.0) {%
+  \textbf{\textcolor{blue!90!black}{STAGE 4: PREDICTIVE MODELING}}\\[1.5pt]
+  \textbf{LSTM Forecaster \& BigMoveAwareLoss}\\
+  \textbullet~Single-layer LSTM (32 units, 10 daily observations)\\
+  \textbullet~Loss: Weighted squared error ($1+2|z|+4B$) + sign penalty
+};
+\node[modelbox, text width=68mm, minimum height=17mm] (t4_eq) at ( 3.75, -8.0) {%
+  \textbf{\textcolor{blue!90!black}{STAGE 4: STRATEGY OPTIMIZATION}}\\[1.5pt]
+  \textbf{GA Parameter Tuning \& GP Logic Trees}\\
+  \textbullet~Separate intraday LSTM: 30 one-minute bars\\
+  \textbullet~Equity rules: GA parameters and GP decision trees
+};
+
+% Tier 5: Execution Barriers & Friction Modeling
+\node[execbox, text width=68mm, minimum height=17mm] (t5_fx) at (-3.75, -10.1) {%
+  \textbf{\textcolor{purple!90!black}{STAGE 5: EXECUTION BARRIERS}}\\[1.5pt]
+  \textbf{Granularity-Mismatch Barrier Execution}\\
+  \textbullet~FX GA: entry threshold, stop, reward-to-risk and sizing\\
+  \textbullet~Minute grid can use hourly or five-minute source bars
+};
+\node[execbox, text width=68mm, minimum height=17mm] (t5_eq) at ( 3.75, -10.1) {%
+  \textbf{\textcolor{purple!90!black}{STAGE 5: REALISTIC FRICTION}}\\[1.5pt]
+  \textbf{Statutory Cost \& Tariff Accounting}\\
+  \textbullet~FYERS Indian tariff (STT, stamp, broker, GST: 5.21\,bp)\\
+  \textbullet~US recorded fees: 0.29\,bp; attribution unresolved
+};
+
+% Tier 6: Portfolio Allocation & Deployment
+\node[evalbox, text width=68mm, minimum height=17mm] (t6_fx) at (-3.75, -12.2) {%
+  \textbf{\textcolor{green!70!black}{STAGE 6: TRADING DEPLOYMENT}}\\[1.5pt]
+  \textbf{Single-Asset Currency Strategy}\\
+  \textbullet~EUR/USD historical simulation: \textbf{+2.28\%} return\\
+  \textbullet~Outperforms passive EUR benchmark (\textbf{-1.59\%}) by 3.87\%
+};
+\node[evalbox, text width=68mm, minimum height=17mm] (t6_eq) at ( 3.75, -12.2) {%
+  \textbf{\textcolor{green!70!black}{STAGE 6: PORTFOLIO ALLOCATION \& RL}}\\[1.5pt]
+  \textbf{Multi-Asset Shared Capital \& RL Policy}\\
+  \textbullet~Top-10 India Rule Portfolio: \textbf{+250.87\%} net return\\
+  \textbullet~95-Stock Intraday RL: \textbf{+4.02\%} test return, \textbf{-1.38\%} max DD
+};
+
+% Vertical Arrows for Track A
+\draw[arrow] (head_fx) -- (t1_fx);
+\draw[arrow] (t1_fx) -- (t2_fx);
+\draw[arrow] (t2_fx) -- (t3_fx);
+\draw[arrow] (t3_fx) -- (t4_fx);
+\draw[arrow] (t4_fx) -- (t5_fx);
+\draw[arrow] (t5_fx) -- (t6_fx);
+
+% Vertical Arrows for Track B
+\draw[arrow] (head_eq) -- (t1_eq);
+\draw[arrow] (t1_eq) -- (t2_eq);
+\draw[arrow] (t2_eq) -- (t3_eq);
+\draw[arrow] (t3_eq) -- (t4_eq);
+\draw[arrow] (t4_eq) -- (t5_eq);
+\draw[arrow] (t5_eq) -- (t6_eq);
+
+\end{tikzpicture}%
+}
+\caption{End-to-end research workflow and system architecture comparing the Forex predictive pipeline (Track A) and the high-frequency equities and portfolio reinforcement learning pipeline (Track B).}\label{fig:full-arch}
+\end{figure}
+
+\clearpage
+
+\section*{Modular Pipeline Breakdown}
+\begin{enumerate}[leftmargin=1.2cm, itemsep=3pt]
+  \item \textbf{Data Ingestion Layer:} Ingests multi-asset feeds across different sampling frequencies. Global macroeconomic series (interest rates, yields, FX rates) from FRED provide market context; Yahoo Finance supplies daily and 1-minute EUR/USD and USD/INR ticks; 100 Indian equities are sourced from Kaggle and updated via the FYERS API; and 95 US equities are drawn from the IEX HIST feed through the HF Data Library.
+  \item \textbf{Preprocessing and Quality Control:} Enforces strict chronological 80/10/10 train/validation/test splits. Missing bond-market rows on holidays are forward-filled. Equity data undergoes systematic gap auditing: isolated gaps ($\le 3$ minutes) are imputed via a 2-sided 4-bar mean, whereas longer interruptions force rolling window segment resets to eliminate overnight return artifacts.
+  \item \textbf{Feature Engineering and Redundancy Screening:} Generates 23 macro/technical features for Forex and 61 candidate features for equities. Removing 18 absolute-price features and 11 further collinear features yields a compact 32-feature subset.
+  \item \textbf{Predictive Modeling and Custom Loss:} Trains a compact single-layer LSTM (32 hidden units) with \textit{BigMoveAwareLoss}, using ten daily observations. Squared error receives weight $1+2|z|$, with four added when the standardized return magnitude reaches or exceeds 1.5. The weight is unbounded (9 at $|z|=2$ and 11 at $|z|=3$). A separate term penalizes sign mismatches.
+  \item \textbf{Rule Optimization and Execution Tuning:} Uses a Genetic Algorithm (GA) to evolve stop loss, reward-to-risk ratio, entry threshold, and position sizing in the Forex experiment. A Genetic Programming (GP) engine evolves conditional decision trees. Stops are recalibrated from 0.20\% to 0.45--0.80\% to absorb intraday Maximum Adverse Excursion (MAE).
+  \item \textbf{Realistic Transaction Cost Modeling:} Applies the Indian tariff per fill. US returns use recorded fees, whose regulatory breakdown remains unresolved.
+  \item \textbf{Shared-Capital Allocation and Intraday RL Policy:} Manages capital across competing stocks. The rule-based engine ranks stocks monthly by trailing performance. The reinforcement-learning engine trains an actor--critic agent on five strategy signals with a drawdown-penalized reward and strict intraday execution (09:31 ET entry, 15:55 ET square-off, zero overnight holding).
+\end{enumerate}
+
+
+\chapter{Comprehensive Literature Review}\label{app:lit-review}
+
+Table~\ref{tab:lit-review-summary} presents a detailed comparative analysis of eight foundational published studies in machine learning for foreign exchange and algorithmic trading.
+
+\begin{table}[htbp]\centering\small\singlespacing
+\caption{Summary of foundational literature in ML for Forex and trading (Part 1: Studies 1--4)}\label{tab:lit-review-summary}
+\begin{tabularx}{\linewidth}{@{}p{0.18\linewidth}p{0.22\linewidth}p{0.26\linewidth}X@{}}\toprule
+\textbf{Study \& Year} & \textbf{Target \& Assets} & \textbf{Data \& Models} & \textbf{Findings \& Contributions}\\\midrule
+\textbf{Baasher \& Fakhr (2011)}~[3] & 
+Whether the next daily high rises or falls relative to the previous daily high. \newline 
+\textit{Assets:} USD/JPY, USD/EGP, EUR/EGP, EUR/SAR (Daily, 2003--2010). & 
+81 features (46 TA, 2 GARCH, Fourier/sine signals). \newline 
+\textit{Models:} SVM, MLP, RBF with PCA/LDA/NCA selection. & 
+Best accuracy 79.8\% (EUR/SAR); best PNP 67.7\% (EUR/EGP). Introduced Percentage Normalized Profit (PNP) and multi-window feature extraction. \\\midrule
+\textbf{Fisichella \& Garolla (2021)}~[1] & 
+Trading action: Buy / Sell / Stay on next 3 candles. \newline 
+\textit{Assets:} 6 major/cross FX pairs (4-hour, 2010--2021). & 
+Candlestick images + 20 TA indicators. \newline 
+\textit{Models:} ResNet50, Vision Transformer (ViT), GA rule ensemble. & 
+The system averaged a 20.2\% gain across the FX markets evaluated. However, standalone deep vision models failed to learn robust directional edge; hybrid GA rules drove profitability. \\\midrule
+\textbf{Huang (2018)}~[2] & 
+Trading decision: Long / Neutral / Short. \newline 
+\textit{Assets:} 12 Forex pairs (15-min intervals, 2012--2017). & 
+8 recent log returns of close + tick volume + sine time features. \newline 
+\textit{Models:} Financial DRQN (LSTM + action augmentation). & 
+Achieved positive returns across all 12 pairs. Demonstrated that online learning, action augmentation, and sequential cash/position states improve RL stability. \\\midrule
+\textbf{Kagadal et al. (2025)}~[4] &
+Five-day USD/INR direction. &
+Daily market data and first-differenced macroeconomic indicators. XGBoost classifier with SHAP feature attribution. &
+Test accuracy was 60.96\% for XGBoost and 58.11\% for logistic regression (2023--2025). \\
+\bottomrule\end{tabularx}
+\end{table}
+
+\begin{table}[htbp]\centering\small\singlespacing
+\caption{Summary of foundational literature in ML for Forex and trading (Part 2: Studies 5--8)}\label{tab:lit-review-summary-part2}
+\begin{tabularx}{\linewidth}{@{}p{0.18\linewidth}p{0.22\linewidth}p{0.26\linewidth}X@{}}\toprule
+\textbf{Study \& Year} & \textbf{Target \& Assets} & \textbf{Data \& Models} & \textbf{Findings \& Contributions}\\\midrule
+\textbf{Rundo (2019)}~[5] & 
+Trend: SHORT / LONG / Trading Range. \newline 
+\textit{Assets:} EUR/USD with EUR/GBP \& GBP/USD (1-Min, 2004--2018). & 
+Normalized close of triangular cross-rates. \newline 
+\textit{Models:} 2-layer LSTM (300 units) + RL Motor Map correction. & 
+Across the four annual results, mean accuracy rose from 71.14\% to 85.15\% with RL correction (+14.01 percentage points). Connected directly to high-frequency grid execution (98.23\% ROI). \\\midrule
+\textbf{Loh et al. (2022)}~[6] & 
+Next-day Buy/Sell signals. \newline 
+\textit{Assets:} EUR/USD (Daily, 2006--2020). & 
+OHLCV + 13 TA indicators; fractional differencing ($d=0.8$). \newline 
+\textit{Models:} Ensemble of DQN, A2C, PPO, CNN-BiLSTM + GA Pullback. & 
+Ensemble earned 9.97\% net P\&L with $-9.69\%$ peak-to-trough drawdown ($-0.68\%$ from opening capital); GA Pullback reached 10.55\% P\&L. Fractional differencing preserved memory while satisfying stationarity. \\\midrule
+\textbf{Dempster \& Leemans (2006)}~[7] & 
+Trading signal: Long vs. Short. \newline 
+\textit{Assets:} EUR/USD (1-Min tick data, HSBC London, 2000--2002). & 
+Past price changes, position status, 14 TA indicators. \newline 
+\textit{Models:} Adaptive Reinforcement Learning (RRL + utility layer). & 
+Generated 5,104 pips ($\approx 26\%$ p.a.) vs. $-1,636$ pips for buy-and-hold (61--63\% directional accuracy). Early pioneer in dynamically optimizing stops and trading hurdles. \\\midrule
+\textbf{Neghab et al. (2025)}~[8] & 
+Exchange-rate value forecasting (1, 5, 10 steps ahead). \newline 
+\textit{Assets:} CAD/USD (Daily \& weekly, Bank of Canada/FRED). & 
+Macro fundamentals: oil, gold, yields, PPI, M1, unemployment, IP. \newline 
+\textit{Models:} LASSO, Ridge, Extra Trees, XGBoost, LightGBM, GRU. & 
+LASSO best for 1-day, LightGBM for 1-week, XGBoost for multi-step. Used SHAP to uncover shifting macro feature importance across economic regimes. \\
+\bottomrule\end{tabularx}
+\end{table}
+
+
+\frontchapter{References}
+\subsection*{Research references}
+[1] M. Fisichella and F. Garolla. Can Deep Learning Improve Technical Analysis of Forex Data to Predict Future Price Movements? \textit{IEEE Access}, 9:153083--153101, 2021. DOI: 10.1109/ACCESS.2021.3127570.\par
+[2] C.-Y. Huang. Financial Trading as a Game: A Deep Reinforcement Learning Approach. arXiv preprint arXiv:1807.02787, 2018.\par
+[3] A. A. Baasher and M. W. Fakhr. FOREX Trend Classification using Machine Learning Techniques. In \textit{Recent Researches in Applied Informatics and Remote Sensing}, pages 41--47, 2011.\par
+[4] D. Kagadal, A. Varma, Ayush, and B. Desai. Macro-Quant: A Hybrid Machine Learning Framework for Non-Stationary Exchange Rate Forecasting (USD/INR). \textit{International Journal of Research in Engineering \& Science}, 9(6), 2025. DOI: 10.5281/zenodo.17929713.\par
+[5] F. Rundo. Deep LSTM with Reinforcement Learning Layer for Financial Trend Prediction in FX High Frequency Trading Systems. \textit{Applied Sciences}, 9(20):4460, 2019. DOI: 10.3390/app9204460.\par
+[6] L. K. Y. Loh, H. K. Kueh, N. J. Parikh, H. Chan, N. J. H. Ho, and M. C. H. Chua. An Ensembling Architecture Incorporating Machine Learning Models and Genetic Algorithm Optimization for Forex Trading. \textit{FinTech}, 1(2):100--124, 2022. DOI: 10.3390/fintech1020008.\par
+[7] M. A. H. Dempster and V. Leemans. An automated FX trading system using adaptive reinforcement learning. \textit{Expert Systems with Applications}, 30(3):543--552, 2006. DOI: 10.1016/j.eswa.2005.10.012.\par
+[8] D. P. Neghab, M. Cevik, M. I. M. Wahab, and A. Basar. Explaining Exchange Rate Forecasts with Macroeconomic Fundamentals Using Interpretive Machine Learning. \textit{Computational Economics}, 65:1857--1899, 2025. DOI: 10.1007/s10614-024-10617-1.\par
+[9] A. Elkassabgi. High-Frequency Data Library: Cleaned 1-Minute Trade-Based Intraday Equities and ETFs from the IEX Exchange. University of Central Arkansas, 2024. URL: https://hfdatalibrary.com.\par
+
+\end{document}

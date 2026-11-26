@@ -1507,6 +1507,7 @@ def predict_and_store_window_model(
             loader,
             device=device,
             target_scaler=target_scaler,
+            previous_values=0.0,  # A return's direction is measured from zero.
             plot=False,
         )
 
@@ -1629,6 +1630,8 @@ class AdvancedProfitCalculator:
         use_fixed_fraction=True,     # True: size based on risk/SL; False: 100% unleveraged allocation
         atr=None,                    # Optional 1D array of ATR or rolling volatility for dynamic TP/SL
         dates=None,                  # Optional datetime index for plotting
+        high_returns=None,           # Optional intraday max excursion (High - Open) / Open
+        low_returns=None,            # Optional intraday min excursion (Low - Open) / Open
     ):
         self.predictions = np.asarray(predictions, dtype=np.float64).reshape(-1)
         self.actual_returns = np.asarray(actual_returns, dtype=np.float64).reshape(-1)
@@ -1643,6 +1646,8 @@ class AdvancedProfitCalculator:
         self.use_fixed_fraction = bool(use_fixed_fraction)
         self.atr = np.asarray(atr, dtype=np.float64).reshape(-1) if atr is not None else None
         self.dates = np.asarray(dates) if dates is not None else None
+        self.high_returns = np.asarray(high_returns, dtype=np.float64).reshape(-1) if high_returns is not None else None
+        self.low_returns = np.asarray(low_returns, dtype=np.float64).reshape(-1) if low_returns is not None else None
 
         min_len = min(len(self.predictions), len(self.actual_returns))
         self.predictions = self.predictions[:min_len]
@@ -1651,6 +1656,10 @@ class AdvancedProfitCalculator:
             self.atr = self.atr[:min_len]
         if self.dates is not None:
             self.dates = self.dates[:min_len]
+        if self.high_returns is not None:
+            self.high_returns = self.high_returns[:min_len]
+        if self.low_returns is not None:
+            self.low_returns = self.low_returns[:min_len]
 
         self._run_backtest()
 
@@ -1934,11 +1943,11 @@ class GeneticStrategyOptimizer:
     - 'return': Total Net Portfolio Return %
     """
     DEFAULT_BOUNDS = {
-        'stop_loss': (0.002, 0.015),          # 0.20% to 1.50% SL
-        'risk_reward_ratio': (1.2, 3.5),      # 1:1.2 to 1:3.5 RRR
-        'threshold': (0.0, 0.0008),           # Confidence deadzone: 0 to 8 pips
-        'risk_per_trade': (0.005, 0.04),      # 0.5% to 4.0% risk per trade
-        'max_leverage': (1.0, 5.0),           # 1x to 5x leverage cap
+        'stop_loss': (0.0040, 0.0080),        # 0.40% to 0.80% SL (intraday MAE noise-tolerant buffer)
+        'risk_reward_ratio': (1.2, 2.5),      # 1:1.2 to 1:2.5 RRR
+        'threshold': (0.00003, 0.00035),      # Confidence deadzone: 0.3 to 3.5 pips
+        'risk_per_trade': (0.010, 0.030),     # 1.0% to 3.0% risk per trade
+        'max_leverage': (1.0, 3.0),           # 1x to 3x leverage cap
     }
 
     def __init__(
@@ -1960,6 +1969,8 @@ class GeneticStrategyOptimizer:
         fee_per_trade=0.0001,
         random_state=None,
         dates=None,
+        high_returns=None,
+        low_returns=None,
         verbose=True,
     ):
         self.predictions = np.asarray(predictions, dtype=np.float64).reshape(-1)
@@ -1968,6 +1979,8 @@ class GeneticStrategyOptimizer:
         self.predictions = self.predictions[:min_len]
         self.actual_returns = self.actual_returns[:min_len]
         self.dates = np.asarray(dates)[:min_len] if dates is not None else None
+        self.high_returns = np.asarray(high_returns, dtype=np.float64).reshape(-1)[:min_len] if high_returns is not None else None
+        self.low_returns = np.asarray(low_returns, dtype=np.float64).reshape(-1)[:min_len] if low_returns is not None else None
 
         self.param_bounds = dict(self.DEFAULT_BOUNDS if param_bounds is None else param_bounds)
         self.gene_keys = list(self.param_bounds.keys())
@@ -2023,8 +2036,24 @@ class GeneticStrategyOptimizer:
         if n_trades < self.min_trades:
             return -999.0
 
-        raw_moves = signals[trade_mask] * self.actual_returns[trade_mask]
-        clamped_returns = np.clip(raw_moves, -sl, tp) - self.fee_per_trade
+        if self.high_returns is not None and self.low_returns is not None:
+            sig_active = signals[trade_mask]
+            act_active = self.actual_returns[trade_mask]
+            high_active = self.high_returns[trade_mask]
+            low_active = self.low_returns[trade_mask]
+            mae = np.where(sig_active == 1, low_active, -high_active)
+            mfe = np.where(sig_active == 1, high_active, -low_active)
+            sl_hit_mask = (mae <= -sl)
+            tp_hit_mask = (~sl_hit_mask) & (mfe >= tp)
+            eod_mask = (~sl_hit_mask) & (~tp_hit_mask)
+            sim_moves = np.zeros_like(act_active)
+            sim_moves[sl_hit_mask] = -sl
+            sim_moves[tp_hit_mask] = tp
+            sim_moves[eod_mask] = sig_active[eod_mask] * act_active[eod_mask]
+            clamped_returns = sim_moves - self.fee_per_trade
+        else:
+            raw_moves = signals[trade_mask] * self.actual_returns[trade_mask]
+            clamped_returns = np.clip(raw_moves, -sl, tp) - self.fee_per_trade
 
         leverage = min(rpt / max(sl, 1e-5), lev_cap)
         trade_rets = leverage * clamped_returns
@@ -2169,6 +2198,8 @@ class GeneticStrategyOptimizer:
             fee_per_trade=self.fee_per_trade,
             max_leverage=self.best_params.get('max_leverage', 3.0),
             dates=self.dates,
+            high_returns=self.high_returns,
+            low_returns=self.low_returns,
         )
 
         return {
@@ -2228,6 +2259,8 @@ def optimize_strategy_ga(
     fee_per_trade=0.0001,
     random_state=None,
     dates=None,
+    high_returns=None,
+    low_returns=None,
     verbose=True,
 ):
     """
@@ -2260,6 +2293,8 @@ def optimize_strategy_ga(
         fee_per_trade=fee_per_trade,
         random_state=random_state,
         dates=dates,
+        high_returns=high_returns,
+        low_returns=low_returns,
         verbose=verbose,
     )
     return optimizer.optimize()

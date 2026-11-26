@@ -1,0 +1,20 @@
+{
+  "valid": {
+    "market": "us",
+    "currency": "USD",
+    "cumulative_return": 0.00577500000000053,
+    "final_equity": 100577.50000000006,
+    "max_drawdown": -0.01665594921465874,
+    "fees": 20.639999999999958,
+    "fills": 384
+  },
+  "test": {
+    "market": "us",
+    "currency": "USD",
+    "cumulative_return": -0.0002081000000007105,
+    "final_equity": 99979.18999999993,
+    "max_drawdown": -0.010837171956051272,
+    "fees": 16.66999999999997,
+    "fills": 312
+  }
+}

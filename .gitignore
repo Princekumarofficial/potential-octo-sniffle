@@ -1,5 +1,5 @@
 .venv
-__pycache__/**
+**/__pycache__/
 model_results.json
 *.log
 *.out
@@ -7,3 +7,7 @@ model_results.json
 *.fls
 *.fuse*
 runs/**
+/full_predictor/__pycache__/
+/full_predictor/datasets/
+full_predictor/reports/**/prepared.npz
+full_predictor/reports/**/policy.pt

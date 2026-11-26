@@ -1,0 +1,70 @@
+{
+  "valid": {
+    "original": {
+      "cumulative_return": -0.09983850000007466,
+      "max_drawdown": -0.10388046147327545,
+      "final_equity": 90016.14999999253,
+      "fees": 12016.52,
+      "fills": 243350,
+      "suppressed_sell_requests": 0,
+      "gross_pnl_before_deducted_fees": 2032.6699999925295,
+      "net_pnl": -9983.850000007471,
+      "exit_reasons": {
+        "agent": 120479,
+        "stop_loss": 622,
+        "take_profit": 307,
+        "session_end": 267
+      },
+      "matches_saved_run": true
+    },
+    "no_agent_sell": {
+      "cumulative_return": 0.010773800000003053,
+      "max_drawdown": -0.0347215621301451,
+      "final_equity": 101077.38000000031,
+      "fees": 329.1,
+      "fills": 6376,
+      "suppressed_sell_requests": 202294,
+      "gross_pnl_before_deducted_fees": 1406.4800000003102,
+      "net_pnl": 1077.3800000003102,
+      "exit_reasons": {
+        "stop_loss": 1637,
+        "take_profit": 977,
+        "session_end": 574
+      }
+    }
+  },
+  "test": {
+    "original": {
+      "cumulative_return": -0.1043283500000427,
+      "max_drawdown": -0.10586459566675344,
+      "final_equity": 89567.16499999573,
+      "fees": 9366.36,
+      "fills": 189720,
+      "suppressed_sell_requests": 0,
+      "gross_pnl_before_deducted_fees": -1066.4750000042695,
+      "net_pnl": -10432.83500000427,
+      "exit_reasons": {
+        "agent": 93996,
+        "stop_loss": 447,
+        "session_end": 229,
+        "take_profit": 188
+      },
+      "matches_saved_run": true
+    },
+    "no_agent_sell": {
+      "cumulative_return": 0.005294899999995772,
+      "max_drawdown": -0.03427485949602849,
+      "final_equity": 100529.48999999958,
+      "fees": 206.65,
+      "fills": 3912,
+      "suppressed_sell_requests": 165608,
+      "gross_pnl_before_deducted_fees": 736.1399999995832,
+      "net_pnl": 529.4899999995832,
+      "exit_reasons": {
+        "stop_loss": 956,
+        "take_profit": 516,
+        "session_end": 484
+      }
+    }
+  }
+}
