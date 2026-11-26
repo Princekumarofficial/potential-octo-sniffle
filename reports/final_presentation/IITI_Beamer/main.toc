@@ -1,0 +1,6 @@
+\beamer@sectionintoc {1}{Overview}{2}{0}{1}
+\beamer@sectionintoc {2}{Daily forex}{8}{0}{2}
+\beamer@sectionintoc {3}{Intraday equities}{15}{0}{3}
+\beamer@sectionintoc {4}{Portfolio results}{19}{0}{4}
+\beamer@sectionintoc {5}{Conclusion}{25}{0}{5}
+\beamer@sectionintoc {6}{Appendix}{26}{0}{6}

@@ -15,7 +15,7 @@
 \setcounter{tocdepth}{2}
 \newcommand{\projecttitle}{Machine Learning for Financial Market Forecasting and Algorithmic Trading}
 \newcommand{\student}{Prince Kumar}
-\newcommand{\guides}{Prof. Raghunath Sahu and Dr. Kalindi C. Pradhan}
+\newcommand{\guides}{Prof. Raghunath Sahoo and Dr. Kalindi C. Pradhan}
 \newcommand{\logoIITI}{\includegraphics[height=34mm]{figures/1-IITI_Logo.png}}
 \newcommand{\frontchapter}[1]{\chapter*{#1}\addcontentsline{toc}{chapter}{#1}}
 \newcommand{\studentblock}{\par\vfill\begin{flushright}\student\\B.Tech. IV Year, Engineering Physics\\IIT Indore\end{flushright}}
@@ -60,7 +60,7 @@ We certify that the above statement made by the student is correct to the best o
 \vspace{12mm}\par
 \begin{tabularx}{\linewidth}{@{}XX@{}}
 \rule{55mm}{0.4pt} & \rule{55mm}{0.4pt}\\
-Prof. Raghunath Sahu & Dr. Kalindi C. Pradhan\\
+Prof. Raghunath Sahoo & Dr. Kalindi C. Pradhan\\
 Designation: \hrulefill & Designation: \hrulefill\\
 Date: \hrulefill & Date: \hrulefill
 \end{tabularx}
@@ -79,6 +79,10 @@ The equity extension used 100 Indian and 95 US stock files. It compared a foreca
 \tableofcontents
 \clearpage\addcontentsline{toc}{chapter}{List of Figures}\listoffigures
 \clearpage\addcontentsline{toc}{chapter}{List of Tables}\listoftables
+\clearpage
+\frontchapter{List of Appendices}
+\noindent Appendix~\ref{app:architecture}\quad Research Workflow and System Architecture\dotfill\pageref{app:architecture}\par
+\noindent Appendix~\ref{app:lit-review}\quad Comprehensive Literature Review\dotfill\pageref{app:lit-review}\par
 \clearpage\pagenumbering{arabic}
 \chapter{Introduction}
 
@@ -124,6 +128,15 @@ Directional accuracy and regression errors were scored out-of-sample on the held
 \caption[Saved evaluation plot for three technical-feature models]{Saved evaluation plot for three technical-feature models. Adding temporal features reduced price error. The last two directional scores cover different observation counts.}
 \end{figure}
 This distinction motivated the shift from predicting a price level to learning daily returns. The technical-analysis study of Fisichella and Garolla [1] provided a related formulation for the forex forecasting question.\par
+
+\subsection*{What changed between the early USD/INR models}
+Persistence used today's close as tomorrow's forecast. The moving-average rule used the mean of the latest three closes. On the training split, their respective MAE values were 0.2082 and 0.1813 INR per dollar, and their RMSE values were 0.3596 and 0.3510. These figures describe in-sample fit. The preceding table reports the neural models on their held-out splits.
+
+\begin{itemize}
+\item \textbf{Base and technical MLPs.} The base model mapped five market inputs through hidden layers of 64 and 32 units to a single price forecast. The technical model used the same hidden layers with 23 inputs. Both used ReLU activations.
+\item \textbf{Temporal MLP.} The temporal model used wider hidden layers (128 and 64 units) and applied dropout at 0.2 after the first activation. Its comparison with the technical MLP therefore changes the architecture as well as the inputs.
+\item \textbf{Training.} The early MLP experiments used mean squared error, Adam with a learning rate of $10^{-3}$, batches of 32 and a 100-epoch training schedule.
+\end{itemize}
 
 \subsection{Building a daily return forecast}\label{exp:1.1}
 A model can track the level of an exchange rate closely while getting tomorrow's direction wrong. The base USD/INR MLP had a test RMSE of 1.9150 rupees per dollar. With technical and temporal inputs, RMSE fell to 0.2395, while directional accuracy reached 52.30\%. The eligible test windows differed slightly across models.\par
@@ -171,6 +184,9 @@ S\&P 500 index & 1,111 / 2,470 & 44.98\% & 0.01201\\
 \caption[Training and validation loss from the NIFTY 50 LSTM run]{Training and validation loss from the NIFTY 50 LSTM run. Its test direction score was 45.32\%.}
 \end{figure}
 Validation fine-tuning added 16 correct EUR/USD predictions. The two index experiments gave lower hit rates. These directional results measure one decision per forecast; trading returns additionally depend on the size, timing and cost of each position.\par
+\subsection*{Training the daily sequence model}
+For each ten-day window the network produces one forecast from the final 32-dimensional hidden state. The daily trainer uses Adam with weight decay $10^{-5}$. A validation-loss scheduler halves the learning rate after a plateau (patience four), and early stopping uses a patience of ten epochs. These settings govern the initial fit. The historical EUR/USD replay later updates the model on a separate schedule.
+
 \subsection*{Cross-asset strategy backtest summary}
 The same LSTM + BigMoveAwareLoss + GA pipeline (\texttt{GeneralTrainer}) was applied without manual re-tuning to all four assets. The table below adds backtested strategy performance to the directional accuracy results.
 \begin{table}[htbp]\centering\singlespacing
@@ -227,8 +243,19 @@ A return forecast supplies a direction. The trading rule must also decide when t
 \includegraphics[height=52mm,width=\linewidth,keepaspectratio]{figures/ga-convergence.png}
 \caption[Validation fitness during the genetic search]{Validation fitness rose from 6.12 to 20.43 during the search. The curve measures selection on validation data.}
 \end{figure}
+\subsection*{How a daily forecast becomes a simulated trade}
+The daily backtester applies the entry threshold to the forecast and uses its sign to select a long or short position. For starting equity $E$, fractional risk $r$, stop distance $s$ and leverage limit $L$, the fixed-fractional rule sets the trade notional to
+\[
+N=\min\!\left(\frac{Er}{s},\,EL\right).
+\]
+For example, with USD 10,000, a 2.696\% risk budget and a 0.20\% stop, the uncapped notional is USD 134,800. The five-times leverage cap reduces it to USD 50,000. A move of 0.20\% against that position costs USD 100 before fees. The daily engine bounds the signed close-to-close move at the stop and profit target. Daily closes alone cannot establish which barrier the market reached first.
+
+\textbf{How the genetic search updates the rules.} Each candidate is a set of numerical trading parameters. After scoring the candidates on validation data, the optimizer copies the best rules into the next generation. It selects parents by tournament, blends their parameters and adds Gaussian mutations. This lets the search vary a stop distance and its associated reward-to-risk ratio together. The selected rule is then evaluated on the later test period.
+
 \subsection*{Why the execution rules changed}
 A long trade can fall 0.20\% after entry, hit its stop, and still close the day above its entry price. Daily closing prices hide that sequence. The execution study widened the stop range to 0.45--0.80\% and fine-tuned the model every ten sessions. Over 65 sessions it recorded 22 wins and 23 losses. Average wins of USD 46.25 exceeded average losses of USD 34.32, leaving a positive return despite winning fewer than half the trades.\par
+\textbf{Rolling forecast updates.} The replay's ten-session update schedule uses short fine-tuning runs (eight epochs at a learning rate of $5\times10^{-5}$). Updating the forecast weights and widening the execution stops affect different parts of the strategy. The combined replay measures their joint outcome.
+
 Source: BTP Executive Summary, pp. 4--6. The preceding section details the simulation's bar resolution and passive benchmark.\par
 \subsection*{Full daily test-set backtest results (681 trading days)}
 The table below summarises EUR/USD performance at three evaluation stages on the held-out daily test period. The GA was fitted on validation data only; test data were never touched during parameter search or model training.
